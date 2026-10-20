@@ -51,3 +51,36 @@ while the gateway PID file identifies a running process.
 
 Fetch the public root CA from `GET /v1/mitm/ca.pem` after the TCP MITM listener
 is ready. Use a service manager rather than `--detach`.
+
+## Socket sessions (F1)
+
+Set `AGENT_VAULT_SOCKET_ROOT=data/agent-vault/sessions`. The gateway creates
+this root if absent. The host creates a session directory below it and sends
+an agent bearer token with each API request:
+
+| Call | Result |
+| --- | --- |
+| `POST /v1/socket-sessions` with `{vault,label,dir}` | `201 {id,vault,socket_path}` |
+| `GET /v1/socket-sessions` | `200 {items:[{id,vault,label,socket_path,created_at}]}` |
+| `DELETE /v1/socket-sessions/{id}` | `204` (unknown or another host's ID: `404`) |
+
+The directory must be absolute, existing and beneath the canonical root after
+symlink resolution (`400` otherwise). Unknown vaults return `404`; no host
+vault grant returns `403`; an already-bound directory or occupied socket path
+returns `409`. Each host lists and deletes only its own sessions.
+
+Mount the directory into the container and connect its relay to `egress.sock`.
+The socket is mode 0666; restrict directory access and mount only the intended
+session directory. Possession of the socket grants proxy access to its vault.
+CONNECT and absolute-form HTTP use the existing injection, network guard,
+request logging and per-vault limits. The per-IP auth-failure gate is skipped.
+Client `Proxy-Authorization` is replaced with the internal identity and never
+forwarded upstream. That identity is proxy-only and internally non-expiring
+until deletion, so no seven-day renewal interruption occurs.
+
+DELETE revokes the token, unlinks the socket and closes active connections,
+including hijacked CONNECTs. Shutdown does the same. Restart rebinding and
+`agent-vault.internal` API passthrough are not implemented in this spike.
+After a crash, remove stale socket files in the host's known session
+directories and recreate sessions; the gateway never unlinks an occupied path
+on POST. Use a fresh directory for each spawn.

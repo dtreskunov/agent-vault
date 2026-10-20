@@ -26,6 +26,15 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+NanoClaw gateway hosts can manage proxy identities with `POST /v1/socket-sessions`
+(`{vault,label,dir}`), `GET /v1/socket-sessions` (`{items:[...]}`), and
+`DELETE /v1/socket-sessions/{id}` using their agent bearer token. The absolute
+directory must already exist beneath `AGENT_VAULT_SOCKET_ROOT`. Mount only that
+session directory: its `egress.sock` is the vault-scoped proxy capability.
+Client `Proxy-Authorization` cannot change the socket's identity. Deletion
+revokes it and closes existing tunnels. Sessions must be recreated after a
+gateway restart in this spike; API passthrough over the socket is not enabled.
+
 - You made an API call and got 401 (unauthorized) or 403 (forbidden)
 - You need credentials for a service you don't have access to
 - A response contains `proposal_hint` in the body

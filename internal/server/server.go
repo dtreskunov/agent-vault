@@ -31,6 +31,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/pidfile"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
+	"github.com/Infisical/agent-vault/internal/socketsessions"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/Infisical/agent-vault/internal/telemetry"
 )
@@ -61,6 +62,8 @@ type agentVaultJSON struct {
 
 // Server is the Agent Vault HTTP server.
 type Server struct {
+	mux *http.ServeMux
+	socketSessions *socketsessions.Manager
 	httpServer  *http.Server
 	store       Store
 	encKey      []byte // 32-byte encryption key, held in memory while running
@@ -107,6 +110,21 @@ func (s *Server) RateLimit() *ratelimit.Registry { return s.rateLimit }
 // is bound to this Server: Start launches it, and SIGINT/SIGTERM/Shutdown
 // stops it alongside the HTTP server.
 func (s *Server) AttachMITM(p *mitm.Proxy) { s.mitm = p }
+
+func (s *Server) AttachSocketSessions(root string) error {
+	if s.mitm == nil {
+		return fmt.Errorf("socket sessions require an enabled MITM proxy and CA")
+	}
+	manager, err := socketsessions.New(root, s.store, s.mitm.Bound, s.logger)
+	if err != nil {
+		return err
+	}
+	s.socketSessions = manager
+	handler := manager.Wrap(http.NotFoundHandler())
+	s.mux.Handle("/v1/socket-sessions", handler)
+	s.mux.Handle("/v1/socket-sessions/", handler)
+	return nil
+}
 
 // AttachInfisical registers the Infisical client. Must be called before Start.
 func (s *Server) AttachInfisical(c *infisical.Client) { s.infisicalClient = c }
@@ -781,6 +799,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	rl := ratelimit.New(rlCfg)
 
 	s := &Server{
+		mux: mux,
 		httpServer: &http.Server{
 			Addr:              addr,
 			Handler:           securityHeaders(rl.GlobalMiddleware(logger)(headless.Wrap(mux))),
@@ -1066,6 +1085,13 @@ func (s *Server) requireInitialized(next http.HandlerFunc) http.HandlerFunc {
 // Start starts the server and blocks until shutdown.
 // It listens for SIGINT/SIGTERM to shut down gracefully.
 func (s *Server) Start() error {
+	if s.socketSessions != nil {
+		defer func() {
+			if err := s.socketSessions.Close(); err != nil {
+				s.logger.Error("closing socket sessions", "err", err)
+			}
+		}()
+	}
 	// Non-fatal: registry already holds env-based config from New().
 	if s.initialized {
 		if _, err := s.applyRateLimitSettingToRegistry(context.Background()); err != nil {

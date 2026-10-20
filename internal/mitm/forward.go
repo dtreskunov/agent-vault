@@ -84,7 +84,7 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	// Read-only pre-gate: reject if this IP's auth-failure budget is
 	// exhausted. Only auth failures are recorded (below). Shares the
 	// TierAuth budget and key shape with CONNECT. Loopback is exempt.
-	if p.rateLimit != nil && !isLoopbackPeer(r) {
+	if p.boundToken == "" && p.rateLimit != nil && !isLoopbackPeer(r) {
 		if d := p.rateLimit.Check(ratelimit.TierAuth, mitmIPKey(r)); !d.Allow {
 			ratelimit.WriteDenial(w, d, "Too many proxy requests")
 			return

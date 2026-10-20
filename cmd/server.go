@@ -258,6 +258,11 @@ func attachServerExtensions(srv *server.Server, host string, mitmPort int, maste
 	if err := attachMITMIfEnabled(srv, host, mitmPort, masterKey, db, maxRespBytes, maxReqBytes); err != nil {
 		return err
 	}
+	if root := os.Getenv("AGENT_VAULT_SOCKET_ROOT"); root != "" {
+		if err := srv.AttachSocketSessions(root); err != nil {
+			return fmt.Errorf("attaching socket sessions: %w", err)
+		}
+	}
 	attachInfisicalIfConfigured(srv, logger)
 	return nil
 }

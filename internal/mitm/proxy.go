@@ -45,6 +45,8 @@ import (
 // Proxy is a transparent MITM proxy. It is safe to start at most once;
 // reuse across Shutdown is not supported.
 type Proxy struct {
+	options          Options
+	boundToken       string
 	ca               ca.Provider
 	sessions         brokercore.SessionResolver
 	creds            brokercore.CredentialProvider
@@ -66,6 +68,7 @@ type Proxy struct {
 // server so proxy limits and control-plane limits live in one registry;
 // nil disables rate limiting on the MITM path.
 type Options struct {
+	BoundToken       string // server-owned socket identity; never accepted from the client
 	CA               ca.Provider
 	Sessions         brokercore.SessionResolver
 	Credentials      brokercore.CredentialProvider
@@ -101,6 +104,8 @@ func New(addr string, opts Options) *Proxy {
 	}
 
 	p := &Proxy{
+		options:          opts,
+		boundToken:       opts.BoundToken,
 		ca:               opts.CA,
 		sessions:         opts.Sessions,
 		creds:            opts.Credentials,
@@ -123,6 +128,12 @@ func New(addr string, opts Options) *Proxy {
 
 // Addr returns the listener address the Proxy was configured with.
 func (p *Proxy) Addr() string { return p.httpServer.Addr }
+
+func (p *Proxy) Bound(token string) *Proxy {
+	opts := p.options
+	opts.BoundToken = token
+	return New("", opts)
+}
 
 // RootPEM returns the root CA certificate in PEM form. Safe for public
 // distribution — clients install this into trust stores to validate the
@@ -170,6 +181,9 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 }
 
 func (p *Proxy) dispatch(w http.ResponseWriter, r *http.Request) {
+	if p.boundToken != "" {
+		r.Header.Set("Proxy-Authorization", "Bearer "+p.boundToken)
+	}
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return

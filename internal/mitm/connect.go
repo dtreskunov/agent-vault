@@ -52,7 +52,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// budget, reject immediately. Only auth failures are recorded
 	// (below) so legitimate agents don't burn the budget. Loopback
 	// is exempt — see isLoopbackPeer.
-	if p.rateLimit != nil && !isLoopbackPeer(r) {
+	if p.boundToken == "" && p.rateLimit != nil && !isLoopbackPeer(r) {
 		if d := p.rateLimit.Check(ratelimit.TierAuth, mitmIPKey(r)); !d.Allow {
 			ratelimit.WriteDenial(w, d, "Too many CONNECT attempts")
 			return
@@ -161,7 +161,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // exhausted. Only called on auth failure — successful requests skip
 // TierAuth entirely (TierProxy covers them). Loopback peers are exempt.
 func (p *Proxy) recordAuthFailure(r *http.Request) {
-	if p.rateLimit != nil && !isLoopbackPeer(r) {
+	if p.boundToken == "" && p.rateLimit != nil && !isLoopbackPeer(r) {
 		p.rateLimit.Allow(ratelimit.TierAuth, mitmIPKey(r))
 	}
 }
