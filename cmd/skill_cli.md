@@ -34,6 +34,11 @@ session directory: its `egress.sock` is the vault-scoped proxy capability.
 Client `Proxy-Authorization` cannot change the socket's identity. Deletion
 revokes it and closes existing tunnels. Sessions must be recreated after a
 gateway restart in this spike; API passthrough over the socket is not enabled.
+Vault admins set `unmatched_host_mode` (`tunnel`, `mitm`, `deny`) through
+`PATCH /v1/vaults/{name}/settings`; GET returns the effective mode. Empty resets
+to `AGENT_VAULT_UNMATCHED_HOST_MODE` (default `mitm`). On CONNECT, any configured
+service matching the host and port, regardless of path, still forces MITM.
+Unmatched `tunnel` connections keep upstream TLS end-to-end and inject nothing.
 
 - You made an API call and got 401 (unauthorized) or 403 (forbidden)
 - You need credentials for a service you don't have access to

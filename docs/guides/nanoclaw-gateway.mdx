@@ -15,6 +15,8 @@ agent-vault server --env-file .env
 AGENT_VAULT_HEADLESS=true
 AGENT_VAULT_MASTER_PASSWORD_FILE=/absolute/path/to/master-password
 AGENT_VAULT_BOOTSTRAP_TOKEN_FILE=data/agent-vault/host-token
+AGENT_VAULT_SOCKET_ROOT=data/agent-vault/sessions
+AGENT_VAULT_UNMATCHED_HOST_MODE=tunnel
 AGENT_VAULT_TELEMETRY=false
 ```
 
@@ -34,6 +36,14 @@ First boot creates `default` and the active instance-owner agent `nanoclaw-host`
 with default-vault admin access. Its token is atomically written with mode 0600.
 Later boots validate the existing file and never silently replace it. Keep
 the token on the host, never in a container mount.
+
+For host-side CLI administration without printing the token:
+
+```bash
+AGENT_VAULT_ADDR=http://127.0.0.1:14321 \
+AGENT_VAULT_TOKEN_FILE=data/agent-vault/host-token \
+agent-vault vault create ag-1780956116163-prz9h2
+```
 
 For a missing or invalid bootstrap file, stop the service, then run:
 
@@ -84,3 +94,98 @@ including hijacked CONNECTs. Shutdown does the same. Restart rebinding and
 After a crash, remove stale socket files in the host's known session
 directories and recreate sessions; the gateway never unlinks an occupied path
 on POST. Use a fresh directory for each spawn.
+
+## Blind tunnels (F2)
+
+`AGENT_VAULT_UNMATCHED_HOST_MODE` accepts `tunnel`, `mitm` or `deny`. It defaults
+to `mitm` for upstream compatibility; NanoClaw sets `tunnel`. Vault admins
+override it with `PATCH /v1/vaults/{name}/settings` and
+`{"unmatched_host_mode":"deny"}`. GET returns the effective value; PATCH with
+an empty mode resets to the environment default. Invalid values fail closed.
+Update the old `unmatched_host_policy` separately from the CONNECT mode.
+
+For CONNECT only, services are matched by host and port across all paths.
+Even a path-scoped or disabled service forces TLS interception on that target,
+so a different path cannot evade injection or service enforcement. Unmatched
+targets are either spliced as raw TCP (`tunnel`), rejected with 403 before
+hijacking (`deny`), or handled by upstream's TLS interception (`mitm`).
+Tunnels preserve the upstream certificate and encrypted bytes, without
+credential injection. DNS/IP checks still run through the network guard at
+dial time, including the unconditional cloud-metadata block.
+
+Structured `CONNECT decision` logs contain the vault, host, port, decision,
+bytes sent/received, duration and status; no headers or payloads are logged.
+The standard request log also receives CONNECT status and duration. Existing
+per-vault/actor proxy limits apply. Socket deletion terminates blind tunnels,
+including half-closed connections.
+
+The existing `unmatched_host_policy` still controls decrypted HTTP requests
+and plain-HTTP forwarding; it is distinct from the pre-TLS CONNECT mode.
+In particular, `unmatched_host_mode=deny` alone is not a plain-HTTP deny policy.
+
+## Reproducible validation
+
+```bash
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o agent-vault .
+go test ./...
+go test -race ./internal/gatewayconfig ./internal/headless ./internal/blindtunnel ./internal/socketsessions
+go test ./internal/socketsessions -run '^$' -bench BenchmarkInterceptedLatency -benchtime=1000x -count=1 -v
+```
+
+The benchmark compares direct HTTPS with HTTPS intercepted through a real
+Unix socket, CA, store-backed session and encrypted credential injection.
+It verifies each response and injection, warms each path with 100 requests,
+then measures 1,000 sequential keep-alive requests per path. It reports p50
+and fails if the added p50 is 5 ms or greater. No external services or real
+credentials are used. Rate/concurrency enforcement remains enabled, with the
+benchmark's token bucket raised to avoid intentional throttling. Connection
+setup and cold-start TLS are excluded.
+
+### Spike results (2026-10-20)
+
+On Linux amd64, Intel N100, Go 1.25.0:
+
+| Path | Samples | p50 |
+| --- | --- | --- |
+| Direct HTTPS | 1,000 | 0.1090 ms |
+| Intercepted HTTPS over the Unix socket | 1,000 | 0.4988 ms |
+| Added p50 | | **0.3898 ms** (limit: less than 5 ms) |
+
+Static `CGO_ENABLED=0` build passed; ELF inspection reports statically linked
+and no dynamic interpreter. The new-package race suite passed. A black-box
+run of the static binary verified env-file/headless startup, owner bootstrap,
+vault creation/admin access, CA fetching, socket injection and header
+stripping, blind forwarding, DELETE cleanup, stable-token restart, missing-file
+failure and explicit offline recovery.
+
+The uncached complete suite passed with a private `/run` and Docker-socket
+fixture. The unmodified host invocation fails the pre-existing
+`TestParseAndValidateMount_RejectDockerSocket`: this host's Docker socket
+symlinks into a root-only Podman directory. No upstream test or shared host
+permission was changed. Reproduce the passing isolated run with:
+
+```bash
+unshare --user --map-root-user --mount sh -c '
+  mount --make-rprivate / &&
+  mount -t tmpfs tmpfs /run &&
+  exec python3 -c '"'"'import socket, subprocess
+s = socket.socket(socket.AF_UNIX)
+s.bind("/run/docker.sock")
+subprocess.run(["go", "test", "./...", "-count=1"], check=True)'"'"'
+'
+```
+
+Provider canaries (model API, Tavily, NextCloud, domagent, Linear MCP and
+external blind hosts) belong to the NanoClaw workstream and have not been
+verified by these local synthetic checks.
+
+Against `872578e`, the existing-file surface is 13 files, 177 insertions and
+6 deletions: **183 changed lines**, below the 300-line limit. No Go module or
+checksum changes were needed. The refreshed `upstream/main` also resolved to
+`872578e` at validation time.
+
+```bash
+git diff --stat 872578e -- $(git ls-tree -r --name-only 872578e)
+git fetch upstream main
+git rebase upstream/main
+```

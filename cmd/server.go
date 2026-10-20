@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/auth"
+	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/gatewayconfig"
@@ -238,6 +239,7 @@ func attachMITMIfEnabled(srv *server.Server, host string, mitmPort int, masterKe
 	srv.AttachMITM(mitm.New(
 		net.JoinHostPort(host, strconv.Itoa(mitmPort)),
 		mitm.Options{
+			ConnectPolicy:    blindtunnel.Policy{Store: db}.Decide,
 			CA:               caProv,
 			Sessions:         srv.SessionResolver(),
 			Credentials:      srv.CredentialProvider(),

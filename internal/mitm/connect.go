@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 )
@@ -65,7 +66,11 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "CONNECT target must be host:port", http.StatusBadRequest)
 		return
 	}
-	port, _ := strconv.Atoi(portStr)
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, "invalid CONNECT port", http.StatusBadRequest)
+		return
+	}
 	if !isValidHost(host) {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
@@ -85,6 +90,17 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		p.recordAuthFailure(r)
 		writeAuthError(w, err)
 		return
+	}
+	if p.options.ConnectPolicy != nil {
+		mode, err := p.options.ConnectPolicy(r.Context(), scope.VaultID, host, port)
+		if err != nil {
+			p.logger.Error("CONNECT policy failed", "host", host, "err", err)
+			http.Error(w, "CONNECT policy unavailable", http.StatusInternalServerError)
+			return
+		}
+		if blindtunnel.Handle(mode, w, r, host, port, scope, p.logger, p.logSink, p.rateLimit, p.lifetime) {
+			return
+		}
 	}
 
 	hj, ok := w.(http.Hijacker)

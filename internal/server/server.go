@@ -1187,6 +1187,11 @@ func (s *Server) Start() error {
 	defer cancel()
 
 	fmt.Println("shutting down server...")
+	if s.socketSessions != nil {
+		if err := s.socketSessions.Close(); err != nil {
+			s.logger.Error("closing socket sessions", "err", err)
+		}
+	}
 	if s.mitm != nil {
 		if err := s.mitm.Shutdown(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: mitm proxy shutdown: %v\n", err)

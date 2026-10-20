@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/auth"
+	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/infisical"
@@ -938,12 +939,18 @@ func (s *Server) handleVaultSettingsGet(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, http.StatusInternalServerError, "Failed to read vault settings")
 		return
 	}
+	mode, err := blindtunnel.Read(ctx, s.store, ns.ID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Failed to read CONNECT mode")
+		return
+	}
 	// infisical_available enables the Infisical option in the credential-store
 	// switcher. Only owners can connect a vault to Infisical (see
 	// handleVaultCredentialStorePatch), so report it owner-gated — otherwise a
 	// non-owner admin would see an option that 403s on submit.
 	jsonOK(w, map[string]interface{}{
 		"unmatched_host_policy": string(policy),
+		"unmatched_host_mode":   string(mode),
 		"infisical_available":   s.infisicalClient != nil && actor != nil && actor.IsOwner(),
 	})
 }
@@ -957,9 +964,27 @@ func (s *Server) handleVaultSettingsPatch(w http.ResponseWriter, r *http.Request
 
 	var body struct {
 		UnmatchedHostPolicy *string `json:"unmatched_host_policy"`
+		UnmatchedHostMode   *string `json:"unmatched_host_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if body.UnmatchedHostMode != nil {
+		if body.UnmatchedHostPolicy != nil {
+			jsonError(w, http.StatusBadRequest, "Update unmatched_host_mode and unmatched_host_policy separately")
+			return
+		}
+		mode, err := blindtunnel.Update(ctx, s.store, ns.ID, *body.UnmatchedHostMode)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, blindtunnel.ErrInvalidMode) {
+				status = http.StatusBadRequest
+			}
+			jsonError(w, status, "Failed to update CONNECT mode: "+err.Error())
+			return
+		}
+		jsonOK(w, map[string]string{"unmatched_host_mode": string(mode)})
 		return
 	}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/gatewayconfig"
 	"github.com/Infisical/agent-vault/internal/headless"
 	"github.com/Infisical/agent-vault/internal/pidfile"
@@ -64,4 +65,7 @@ func init() {
 func loadGatewayEnv() {
 	path, _ := serverCmd.Flags().GetString("env-file")
 	gatewayEnvErr = gatewayconfig.Load(path)
+	if gatewayEnvErr == nil {
+		_, gatewayEnvErr = blindtunnel.Default()
+	}
 }

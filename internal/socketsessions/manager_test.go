@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/crypto"
@@ -45,15 +46,34 @@ type fixture struct {
 	ca      ca.Provider
 	records chan requestlog.Record
 	limits  *ratelimit.Registry
+	logs    *lockedBuffer
 }
 
 type channelSink chan requestlog.Record
 
 func (s channelSink) Record(_ context.Context, r requestlog.Record) { s <- r }
 
+type lockedBuffer struct {
+	mu sync.Mutex
+	strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Builder.Write(p)
+}
+
+func (b *lockedBuffer) text() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Builder.String()
+}
+
 func setup(t testing.TB) *fixture {
 	t.Helper()
 	t.Setenv("AGENT_VAULT_ALLOW_PRIVATE_RANGES", "true")
+	t.Setenv("AGENT_VAULT_UNMATCHED_HOST_MODE", "mitm")
 	dir, err := os.MkdirTemp("", "av-socket-test-")
 	if err != nil {
 		t.Fatal(err)
@@ -80,11 +100,13 @@ func setup(t testing.TB) *fixture {
 	}
 	records := make(chan requestlog.Record, 10000)
 	limits := ratelimit.New(ratelimit.DefaultsFor(ratelimit.ProfileDefault))
+	logs := &lockedBuffer{}
 	p := mitm.New("", mitm.Options{
 		CA: provider, Sessions: brokercore.NewStoreSessionResolver(db),
 		Credentials: brokercore.NewStoreCredentialProvider(credentialStore{db}, key),
-		Logger:      slog.New(slog.DiscardHandler), LogSink: channelSink(records),
-		RateLimit: limits,
+		Logger:      slog.New(slog.NewJSONHandler(logs, nil)), LogSink: channelSink(records),
+		RateLimit:     limits,
+		ConnectPolicy: blindtunnel.Policy{Store: db}.Decide,
 	})
 	root := filepath.Join(dir, "sockets")
 	manager, err := New(root, db, p.Bound, slog.New(slog.DiscardHandler))
@@ -96,7 +118,7 @@ func setup(t testing.TB) *fixture {
 			t.Error(err)
 		}
 	})
-	return &fixture{manager, db, manager.Wrap(http.NotFoundHandler()), token.ID, vault, root, provider, records, limits}
+	return &fixture{manager, db, manager.Wrap(http.NotFoundHandler()), token.ID, vault, root, provider, records, limits, logs}
 }
 
 func (f *fixture) call(method, path, body string) *httptest.ResponseRecorder {

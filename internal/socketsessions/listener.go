@@ -73,3 +73,10 @@ func (c *trackedConn) Close() error {
 	})
 	return err
 }
+
+func (c *trackedConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return c.Close()
+}

@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/netguard"
@@ -45,6 +46,8 @@ import (
 // Proxy is a transparent MITM proxy. It is safe to start at most once;
 // reuse across Shutdown is not supported.
 type Proxy struct {
+	lifetime         context.Context
+	stop             context.CancelFunc
 	options          Options
 	boundToken       string
 	ca               ca.Provider
@@ -68,6 +71,7 @@ type Proxy struct {
 // server so proxy limits and control-plane limits live in one registry;
 // nil disables rate limiting on the MITM path.
 type Options struct {
+	ConnectPolicy    func(context.Context, string, string, int) (blindtunnel.Mode, error)
 	BoundToken       string // server-owned socket identity; never accepted from the client
 	CA               ca.Provider
 	Sessions         brokercore.SessionResolver
@@ -103,7 +107,10 @@ func New(addr string, opts Options) *Proxy {
 		maxReq = brokercore.DefaultMaxRequestBytes
 	}
 
+	proxyCtx, stop := context.WithCancel(context.Background())
 	p := &Proxy{
+		lifetime:         proxyCtx,
+		stop:             stop,
 		options:          opts,
 		boundToken:       opts.BoundToken,
 		ca:               opts.CA,
@@ -176,6 +183,7 @@ func (p *Proxy) Serve(l net.Listener) error {
 // handler on Hijack), so callers should allow the process to exit after
 // Shutdown returns; the tunnels will die with it.
 func (p *Proxy) Shutdown(ctx context.Context) error {
+	p.stop()
 	p.upstream.CloseIdleConnections()
 	return p.httpServer.Shutdown(ctx)
 }
