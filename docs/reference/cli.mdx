@@ -18,6 +18,7 @@ description: "Complete reference for all Agent Vault CLI commands."
     | Flag | Default | Description |
     |------|---------|-------------|
     | `--host` | `127.0.0.1` | Host to bind to |
+    | `--env-file` | (empty) | Import only `AGENT_VAULT_*` assignments without shell evaluation. Process environment wins. Relative paths use the working directory; input variables support `_FILE` variants. |
     | `--port` | `14321` | Port to listen on. Also respects the `PORT` env var (common on PaaS platforms); the flag takes precedence. |
     | `-d`, `--detach` | `false` | Run in background (detached) mode |
     | `--password-stdin` | `false` | Read master password from stdin |
@@ -35,6 +36,9 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `PORT` | Server listen port (default `14321`). The `--port` flag takes precedence. |
     | `DATABASE_URL` | PostgreSQL connection URL (e.g. `postgres://user:pass@host:5432/agentvault`). When set, Agent Vault uses Postgres instead of SQLite. The `--database-url` flag takes precedence. See [PostgreSQL](/self-hosting/postgres). |
     | `AGENT_VAULT_MASTER_PASSWORD` | Derives a KEK that wraps the data encryption key. Omit for passwordless mode. |
+    | `AGENT_VAULT_MASTER_PASSWORD_FILE` | Read the master password from a file; mutually exclusive with the plain variable. |
+    | `AGENT_VAULT_HEADLESS` | `true` enables the [NanoClaw gateway](/guides/nanoclaw-gateway): API-only, no human accounts/invites/SMTP, password required, foreground, listeners restricted to `127.0.0.1`. |
+    | `AGENT_VAULT_BOOTSTRAP_TOKEN_FILE` | Required headless owner-agent token output (0600); never rotated automatically. Stop the gateway and explicitly run `agent-vault agent rotate nanoclaw-host` with the same environment to recover it. |
     | `AGENT_VAULT_LOG_LEVEL` | Fallback for `--log-level` when the flag is not set. Accepts `info` or `debug`. |
     | `AGENT_VAULT_MAX_RESPONSE_BYTES` | Maximum response body bytes streamed to agents (default `0` = unlimited). The `--max-response-bytes` flag takes precedence. |
     | `AGENT_VAULT_MAX_REQUEST_BYTES` | Maximum request body bytes forwarded to upstreams (default `1073741824` = 1 GiB). The `--max-request-bytes` flag takes precedence. |

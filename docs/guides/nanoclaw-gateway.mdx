@@ -1,0 +1,53 @@
+---
+title: "NanoClaw credential gateway"
+description: "Headless gateway spike on the bananaclaw fork."
+---
+
+## Headless bootstrap (F10)
+
+Run from the NanoClaw working directory:
+
+```bash
+agent-vault server --env-file .env
+```
+
+```dotenv
+AGENT_VAULT_HEADLESS=true
+AGENT_VAULT_MASTER_PASSWORD_FILE=/absolute/path/to/master-password
+AGENT_VAULT_BOOTSTRAP_TOKEN_FILE=data/agent-vault/host-token
+AGENT_VAULT_TELEMETRY=false
+```
+
+Only `AGENT_VAULT_*` keys are imported. Process variables win; values are
+literal (no shell expansion). Single/double quotes and trailing comments are
+accepted. Relative paths are relative to the working directory, not the env
+file. Input settings accept `_FILE`; do not also set the plain variable.
+The bootstrap-token path is an output, not a secret-file input.
+
+Headless mode requires a nonempty master password and foreground operation.
+Both TCP listeners must bind to `127.0.0.1`; other `--host` values fail.
+The UI, human-account routes, invites, cookie authentication and SMTP are off.
+Normal agent-token REST access remains available, including vault creation
+(the creating host agent becomes vault admin).
+
+First boot creates `default` and the active instance-owner agent `nanoclaw-host`
+with default-vault admin access. Its token is atomically written with mode 0600.
+Later boots validate the existing file and never silently replace it. Keep
+the token on the host, never in a container mount.
+
+For a missing or invalid bootstrap file, stop the service, then run:
+
+```bash
+AGENT_VAULT_HEADLESS=true \
+AGENT_VAULT_MASTER_PASSWORD_FILE=/absolute/path/to/master-password \
+AGENT_VAULT_BOOTSTRAP_TOKEN_FILE=data/agent-vault/host-token \
+agent-vault agent rotate nanoclaw-host
+```
+
+Use the same working directory, database configuration and HOME as the service.
+This explicit local recovery unlocks the database, revokes the previous token
+and atomically writes the replacement without printing it. It refuses to run
+while the gateway PID file identifies a running process.
+
+Fetch the public root CA from `GET /v1/mitm/ca.pem` after the TCP MITM listener
+is ready. Use a service manager rather than `--detach`.

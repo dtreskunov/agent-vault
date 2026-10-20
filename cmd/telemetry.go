@@ -15,6 +15,10 @@ func init() {
 }
 
 func initTelemetry() {
+	loadGatewayEnv()
+	if gatewayEnvErr != nil {
+		return
+	}
 	if telemetry.IsDisabled() {
 		return
 	}

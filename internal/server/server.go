@@ -21,6 +21,8 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/gatewayconfig"
+	"github.com/Infisical/agent-vault/internal/headless"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/netguard"
@@ -246,6 +248,8 @@ func (a credentialStoreAdapter) UpdateCredentialOAuthError(ctx context.Context, 
 // Logger returns the server's structured logger. Callers (e.g. the MITM
 // proxy constructed outside the server) use this to share a single logger.
 func (s *Server) Logger() *slog.Logger { return s.logger }
+
+func (s *Server) Handler() http.Handler { return s.httpServer.Handler }
 
 // BaseURL returns the externally-reachable base URL of the server
 // (e.g. "http://127.0.0.1:14321").
@@ -779,7 +783,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	s := &Server{
 		httpServer: &http.Server{
 			Addr:              addr,
-			Handler:           securityHeaders(rl.GlobalMiddleware(logger)(mux)),
+			Handler:           securityHeaders(rl.GlobalMiddleware(logger)(headless.Wrap(mux))),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      60 * time.Second,
@@ -1324,6 +1328,10 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if sess.IsExpired(time.Now()) {
 			jsonError(w, http.StatusUnauthorized, "Session expired")
+			return
+		}
+		if gatewayconfig.Headless() && sess.AgentID == "" {
+			jsonError(w, http.StatusUnauthorized, "Headless mode requires an agent token")
 			return
 		}
 

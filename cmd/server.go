@@ -20,6 +20,8 @@ import (
 	"github.com/Infisical/agent-vault/internal/auth"
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/gatewayconfig"
+	"github.com/Infisical/agent-vault/internal/headless"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/notify"
@@ -85,6 +87,12 @@ var serverCmd = &cobra.Command{
 		logLevelChanged := cmd.Flags().Changed("log-level")
 		maxRespBytes, _ := cmd.Flags().GetInt64("max-response-bytes")
 		maxReqBytes, _ := cmd.Flags().GetInt64("max-request-bytes")
+		if !cmd.Flags().Changed("max-response-bytes") {
+			maxRespBytes = defaultMaxResponseBytes()
+		}
+		if !cmd.Flags().Changed("max-request-bytes") {
+			maxReqBytes = defaultMaxRequestBytes()
+		}
 		addr := fmt.Sprintf("%s:%d", host, port)
 
 		logLevel, err := resolveLogLevel(logLevelFlag, logLevelChanged)
@@ -155,6 +163,13 @@ var serverCmd = &cobra.Command{
 		}
 		initialized := userCount > 0
 
+		if gatewayconfig.Headless() {
+			if err := headless.Bootstrap(ctx, db); err != nil {
+				masterKey.Wipe()
+				return err
+			}
+			initialized = true
+		}
 		if !initialized && interactive {
 			if err := promptOwnerSetup(cmd, db, nil); err != nil {
 				masterKey.Wipe()
@@ -175,6 +190,9 @@ var serverCmd = &cobra.Command{
 		defer masterKey.Wipe()
 		baseURL := resolveBaseURL(addr)
 		smtpCfg := notify.LoadSMTPConfig()
+		if gatewayconfig.Headless() {
+			smtpCfg = nil
+		}
 		_ = os.Unsetenv("AGENT_VAULT_SMTP_PASSWORD")
 		notifier := notify.New(smtpCfg)
 		srv := server.New(addr, db, masterKey.Key(), notifier, initialized, baseURL, logger)
@@ -416,6 +434,9 @@ func unlockOrSetup(cmd *cobra.Command, db store.Store, passwordStdin bool) (*aut
 // unlockOrSetupWithPassword resolves the DEK using a known password (no prompting, no retry).
 // Used by the AGENT_VAULT_MASTER_PASSWORD envvar and --password-stdin code paths.
 func unlockOrSetupWithPassword(db store.Store, password []byte) (*auth.MasterKey, error) {
+	if gatewayconfig.Headless() && len(password) == 0 {
+		return nil, fmt.Errorf("headless gateway requires a nonempty master password")
+	}
 	ctx := context.Background()
 	record, err := db.GetMasterKeyRecord(ctx)
 	if err != nil {
