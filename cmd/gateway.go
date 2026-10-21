@@ -9,6 +9,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/gatewayconfig"
 	"github.com/Infisical/agent-vault/internal/headless"
 	"github.com/Infisical/agent-vault/internal/pidfile"
+	"github.com/Infisical/agent-vault/internal/revealpolicy"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -67,5 +68,8 @@ func loadGatewayEnv() {
 	gatewayEnvErr = gatewayconfig.Load(path)
 	if gatewayEnvErr == nil {
 		_, gatewayEnvErr = blindtunnel.Default()
+	}
+	if gatewayEnvErr == nil {
+		_, gatewayEnvErr = revealpolicy.Environment()
 	}
 }

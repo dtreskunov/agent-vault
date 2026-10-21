@@ -54,6 +54,7 @@ func TestSecretFileErrors(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	t.Setenv("AGENT_VAULT_HEADLESS", "true")
+	t.Setenv("AGENT_VAULT_REVEAL_DISABLED", "true")
 	t.Setenv("AGENT_VAULT_MASTER_PASSWORD", "test")
 	t.Setenv("AGENT_VAULT_BOOTSTRAP_TOKEN_FILE", "/tmp/test-output")
 	if err := Validate("127.0.0.1", false, false); err != nil {

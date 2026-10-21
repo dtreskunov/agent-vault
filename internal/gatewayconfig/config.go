@@ -119,6 +119,9 @@ func Validate(host string, detach, passwordStdin bool) error {
 	if !Headless() {
 		return nil
 	}
+	if os.Getenv("AGENT_VAULT_REVEAL_DISABLED") != "true" {
+		return fmt.Errorf("headless gateway requires AGENT_VAULT_REVEAL_DISABLED=true")
+	}
 	if host != "127.0.0.1" {
 		return fmt.Errorf("headless gateway listeners must bind to 127.0.0.1")
 	}

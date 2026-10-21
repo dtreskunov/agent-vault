@@ -28,6 +28,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/notify"
 	"github.com/Infisical/agent-vault/internal/pidfile"
 	"github.com/Infisical/agent-vault/internal/requestlog"
+	"github.com/Infisical/agent-vault/internal/revealpolicy"
 	"github.com/Infisical/agent-vault/internal/server"
 	"github.com/Infisical/agent-vault/internal/session"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -257,6 +258,9 @@ func attachMITMIfEnabled(srv *server.Server, host string, mitmPort int, masterKe
 // attachServerExtensions wires optional subsystems (MITM, Infisical) onto srv.
 // Both bootstrap paths (foreground and detached child) call this.
 func attachServerExtensions(srv *server.Server, host string, mitmPort int, masterKey []byte, db store.Store, logger *slog.Logger, maxRespBytes, maxReqBytes int64) error {
+	if err := revealpolicy.Configure(context.Background(), db); err != nil {
+		return fmt.Errorf("configuring credential reveal policy: %w", err)
+	}
 	if err := attachMITMIfEnabled(srv, host, mitmPort, masterKey, db, maxRespBytes, maxReqBytes); err != nil {
 		return err
 	}

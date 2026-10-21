@@ -11,6 +11,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/infisical"
+	"github.com/Infisical/agent-vault/internal/revealpolicy"
 	"github.com/Infisical/agent-vault/internal/store"
 )
 
@@ -123,6 +124,16 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if reveal {
+		disabled, err := revealpolicy.Disabled(ctx, s.store)
+		if err != nil {
+			s.logger.Error("checking credential reveal policy", "err", err)
+			jsonError(w, http.StatusInternalServerError, "Credential reveal policy unavailable")
+			return
+		}
+		if disabled {
+			jsonCodedError(w, http.StatusForbidden, "credential_reveal_disabled", "Credential values are write-only on this instance")
+			return
+		}
 		// Revealing values requires member+ role (blocks proxy-role agents).
 		if _, err := s.requireVaultMember(w, r, ns.ID); err != nil {
 			return

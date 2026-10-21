@@ -26,6 +26,12 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+In the NanoClaw headless gateway, credential values are write-only.
+`GET /v1/credentials?reveal=true` (including single-key reads) returns
+`403 credential_reveal_disabled` even for instance owners. Key/metadata lists
+and proxy injection remain available; add or replace values through the host's
+credential settings rather than trying to retrieve them.
+
 NanoClaw gateway hosts can manage proxy identities with `POST /v1/socket-sessions`
 (`{vault,label,dir}`), `GET /v1/socket-sessions` (`{items:[...]}`), and
 `DELETE /v1/socket-sessions/{id}` using their agent bearer token. The absolute

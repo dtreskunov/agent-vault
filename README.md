@@ -63,6 +63,8 @@ Agent Vault works with all kinds of AI Agent use-cases including secure remote c
 **NanoClaw fork:** see [Headless credential gateway](docs/guides/nanoclaw-gateway.mdx) for unattended `.env` bootstrap, socket sessions and unmatched-host tunnels on the `bananaclaw` branch.
 Socket bindings survive gateway restarts; running containers reconnect through
 the same mounted directories without respawning.
+Headless mode requires `AGENT_VAULT_REVEAL_DISABLED=true`; credential values
+are write-only for every role, including the host owner agent.
 
 Agent Vault is both a vault and proxy service and ships as a single binary that acts as both a server and CLI client. It stores credentials and brokers them to your AI agents using a MITM proxy architecture. By design, Agent Vault is meant to be deployed on a separate machine from your AI agents to provide the security guarantee needed so your AI agents cannot directly access the credentials within Agent Vault.
 

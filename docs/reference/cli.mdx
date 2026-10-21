@@ -38,6 +38,7 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `AGENT_VAULT_MASTER_PASSWORD` | Derives a KEK that wraps the data encryption key. Omit for passwordless mode. |
     | `AGENT_VAULT_MASTER_PASSWORD_FILE` | Read the master password from a file; mutually exclusive with the plain variable. |
     | `AGENT_VAULT_HEADLESS` | `true` enables the [NanoClaw gateway](/guides/nanoclaw-gateway): API-only, no human accounts/invites/SMTP, password required, foreground, listeners restricted to `127.0.0.1`. |
+    | `AGENT_VAULT_REVEAL_DISABLED` | Must be `true` in headless mode. Persisted instance-wide write-only boundary; all roles receive `403 credential_reveal_disabled` for reveal requests. Cannot be downgraded through the API or by clearing the environment. |
     | `AGENT_VAULT_BOOTSTRAP_TOKEN_FILE` | Required headless owner-agent token output (0600); never rotated automatically. Stop the gateway and explicitly run `agent-vault agent rotate nanoclaw-host` with the same environment to recover it. |
     | `AGENT_VAULT_SOCKET_ROOT` | Enable socket sessions. Existing absolute session directories must resolve beneath this root; relative root paths use the working directory. |
     | `AGENT_VAULT_UNMATCHED_HOST_MODE` | Unmatched CONNECT default: `tunnel`, `mitm` (upstream-compatible default), or `deny`; overridden by vault setting `unmatched_host_mode`. |

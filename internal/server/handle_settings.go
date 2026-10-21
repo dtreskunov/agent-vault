@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Infisical/agent-vault/internal/ratelimit"
+	"github.com/Infisical/agent-vault/internal/revealpolicy"
 )
 
 // handleEmailTest sends a test email to verify SMTP configuration.
@@ -74,11 +75,17 @@ func (s *Server) writeSettingsResponse(w http.ResponseWriter, ctx context.Contex
 		jsonError(w, http.StatusInternalServerError, "Failed to read settings")
 		return
 	}
+	disabled, err := revealpolicy.Disabled(ctx, s.store)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Failed to read credential reveal policy")
+		return
+	}
 
 	resp := map[string]interface{}{
 		"allowed_email_domains": []string{},
 		"invite_only":           false,
 		"smtp_configured":       s.notifier.Enabled(),
+		"reveal_disabled":       disabled,
 	}
 	if raw, ok := settings[settingAllowedDomains]; ok {
 		var domains []string
@@ -105,12 +112,17 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		RevealDisabled      *bool                    `json:"reveal_disabled"`
 		AllowedEmailDomains *[]string                `json:"allowed_email_domains"`
 		InviteOnly          *bool                    `json:"invite_only"`
 		RateLimit           *rateLimitSettingPayload `json:"rate_limit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if req.RevealDisabled != nil {
+		jsonError(w, http.StatusForbidden, "reveal_disabled is operator-managed and cannot be changed through the API")
 		return
 	}
 

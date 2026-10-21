@@ -13,6 +13,7 @@ agent-vault server --env-file .env
 
 ```dotenv
 AGENT_VAULT_HEADLESS=true
+AGENT_VAULT_REVEAL_DISABLED=true
 AGENT_VAULT_MASTER_PASSWORD_FILE=/absolute/path/to/master-password
 AGENT_VAULT_BOOTSTRAP_TOKEN_FILE=data/agent-vault/host-token
 AGENT_VAULT_SOCKET_ROOT=data/agent-vault/sessions
@@ -26,7 +27,8 @@ accepted. Relative paths are relative to the working directory, not the env
 file. Input settings accept `_FILE`; do not also set the plain variable.
 The bootstrap-token path is an output, not a secret-file input.
 
-Headless mode requires a nonempty master password and foreground operation.
+Headless mode requires a nonempty master password,
+`AGENT_VAULT_REVEAL_DISABLED=true` and foreground operation.
 Both TCP listeners must bind to `127.0.0.1`; other `--host` values fail.
 The UI, human-account routes, invites, cookie authentication and SMTP are off.
 Normal agent-token REST access remains available, including vault creation
@@ -107,6 +109,7 @@ For a missing or invalid bootstrap file, stop the service, then run:
 
 ```bash
 AGENT_VAULT_HEADLESS=true \
+AGENT_VAULT_REVEAL_DISABLED=true \
 AGENT_VAULT_MASTER_PASSWORD_FILE=/absolute/path/to/master-password \
 AGENT_VAULT_BOOTSTRAP_TOKEN_FILE=data/agent-vault/host-token \
 agent-vault agent rotate nanoclaw-host
@@ -119,6 +122,29 @@ while the gateway PID file identifies a running process.
 
 Fetch the public root CA from `GET /v1/mitm/ca.pem` after the TCP MITM listener
 is ready. Use a service manager rather than `--detach`.
+
+## Write-only credentials (F6)
+
+Set `AGENT_VAULT_REVEAL_DISABLED=true` before upgrading a headless instance.
+Startup fails if it is unset or false. The gateway persists
+`reveal_disabled=true` in instance settings. Once enabled, clearing the
+environment or setting the variable to false does not re-enable reveals.
+Changing this boundary requires an explicit offline database change, not an
+owner API request.
+
+`GET /v1/credentials?reveal=true` returns
+`403 {"code":"credential_reveal_disabled",...}` for every role, including
+instance owners, human sessions and scoped tokens. The same policy covers
+bulk reveals, single-key reads, OAuth access tokens and dynamic credentials.
+The decision happens before decryption or dynamic-secret resolution.
+Credential updates, key/metadata lists, OAuth status and normal proxy
+injection remain available. OAuth metadata contains only public configuration,
+timestamps and presence sentinels, never token or client-secret values.
+
+`GET /v1/admin/settings` includes the effective `reveal_disabled` value.
+Trying to update that field through `PUT /v1/admin/settings` returns `403`.
+A policy lookup failure denies the reveal with `500` rather than exposing
+values under a default policy.
 
 ## Socket sessions (F1)
 
