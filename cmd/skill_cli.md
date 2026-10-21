@@ -32,8 +32,10 @@ NanoClaw gateway hosts can manage proxy identities with `POST /v1/socket-session
 directory must already exist beneath `AGENT_VAULT_SOCKET_ROOT`. Mount only that
 session directory: its `egress.sock` is the vault-scoped proxy capability.
 Client `Proxy-Authorization` cannot change the socket's identity. Deletion
-revokes it and closes existing tunnels. Sessions must be recreated after a
-gateway restart in this spike; API passthrough over the socket is not enabled.
+revokes it and closes existing tunnels. Sessions survive gateway restarts:
+the same IDs and socket paths are rebound automatically. Missing directories
+are logged and skipped, but the sessions remain listed for host reconciliation
+and deletion. API passthrough over the socket is not enabled.
 Vault admins set `unmatched_host_mode` (`tunnel`, `mitm`, `deny`) through
 `PATCH /v1/vaults/{name}/settings`; GET returns the effective mode. Empty resets
 to `AGENT_VAULT_UNMATCHED_HOST_MODE` (default `mitm`). On CONNECT, any configured

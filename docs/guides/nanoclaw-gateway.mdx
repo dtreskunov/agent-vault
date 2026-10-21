@@ -147,11 +147,25 @@ forwarded upstream. That identity is proxy-only and internally non-expiring
 until deletion, so no seven-day renewal interruption occurs.
 
 DELETE revokes the token, unlinks the socket and closes active connections,
-including hijacked CONNECTs. Shutdown does the same. Restart rebinding and
-`agent-vault.internal` API passthrough are not implemented in this spike.
-After a crash, remove stale socket files in the host's known session
-directories and recreate sessions; the gateway never unlinks an occupied path
-on POST. Use a fresh directory for each spawn.
+including hijacked CONNECTs. Shutdown closes connections and unlinks sockets,
+but preserves their identities and bindings. On restart, the gateway rebinds
+the same socket paths with mode 0666 and retains each ID, vault, label and
+creation time. Containers reconnect through their existing directory mount.
+API passthrough via `agent-vault.internal` is not enabled.
+
+Bindings and internal tokens are encrypted with the vault data key in the
+existing database's instance settings. They are never stored as plaintext
+token files. Only one gateway can own a socket root at a time. Changing the
+root while persisted sessions exist fails explicitly rather than moving
+container capabilities silently.
+
+After an unclean exit, only known persisted socket paths are eligible for
+stale-socket cleanup. An active listener or a non-socket file is never replaced.
+Missing directories are logged and skipped, not recreated; their sessions
+remain in GET so NanoClaw can reconcile them against live containers and
+DELETE stale entries. Revoked identities or host memberships are not restored.
+A POST with an occupied socket path still returns `409`. Use a fresh directory
+for each spawn and do not remove live session directories until reconciliation.
 
 ## Blind tunnels (F2)
 

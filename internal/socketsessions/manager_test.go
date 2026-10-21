@@ -109,7 +109,7 @@ func setup(t testing.TB) *fixture {
 		ConnectPolicy: blindtunnel.Policy{Store: db}.Decide,
 	})
 	root := filepath.Join(dir, "sockets")
-	manager, err := New(root, db, p.Bound, slog.New(slog.DiscardHandler))
+	manager, err := New(root, db, p.Bound, slog.New(slog.DiscardHandler), key)
 	if err != nil {
 		t.Fatal(err)
 	}

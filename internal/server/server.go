@@ -115,7 +115,7 @@ func (s *Server) AttachSocketSessions(root string) error {
 	if s.mitm == nil {
 		return fmt.Errorf("socket sessions require an enabled MITM proxy and CA")
 	}
-	manager, err := socketsessions.New(root, s.store, s.mitm.Bound, s.logger)
+	manager, err := socketsessions.New(root, s.store, s.mitm.Bound, s.logger, s.encKey)
 	if err != nil {
 		return err
 	}

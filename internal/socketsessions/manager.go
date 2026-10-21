@@ -26,9 +26,12 @@ type Store interface {
 	GetSession(context.Context, string) (*store.Session, error)
 	GetAgentByID(context.Context, string) (*store.Agent, error)
 	GetVault(context.Context, string) (*store.Vault, error)
+	GetVaultByID(context.Context, string) (*store.Vault, error)
 	GetVaultRole(context.Context, string, string) (string, error)
 	CreateScopedSession(context.Context, store.CreateScopedSessionParams) (*store.Session, error)
 	DeleteSession(context.Context, string) error
+	GetSetting(context.Context, string) (string, error)
+	SetSetting(context.Context, string, string) error
 }
 
 type Item struct {
@@ -54,9 +57,11 @@ type Manager struct {
 	mu     sync.Mutex
 	items  map[string]*entry
 	closed bool
+	key    []byte
+	lock   *os.File
 }
 
-func New(root string, db Store, bound func(string) *mitm.Proxy, logger *slog.Logger) (*Manager, error) {
+func New(root string, db Store, bound func(string) *mitm.Proxy, logger *slog.Logger, key []byte) (*Manager, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -68,7 +73,11 @@ func New(root string, db Store, bound func(string) *mitm.Proxy, logger *slog.Log
 	if err != nil {
 		return nil, fmt.Errorf("resolving socket root: %w", err)
 	}
-	return &Manager{root: resolved, store: db, bound: bound, logger: logger, items: make(map[string]*entry)}, nil
+	m := &Manager{root: resolved, store: db, bound: bound, logger: logger, key: key, items: make(map[string]*entry)}
+	if err := m.restore(); err != nil {
+		return nil, errors.Join(err, m.Close())
+	}
+	return m, nil
 }
 
 func (m *Manager) Wrap(next http.Handler) http.Handler {
@@ -222,11 +231,12 @@ func (m *Manager) create(w http.ResponseWriter, r *http.Request) {
 		listener: newTrackedListener(listener),
 	}
 	m.items[e.ID] = e
-	go func() {
-		if err := e.proxy.Serve(e.listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			m.logger.Error("socket proxy stopped", "id", e.ID, "err", err)
-		}
-	}()
+	if err := m.persist(r.Context()); err != nil {
+		delete(m.items, e.ID)
+		m.internal(w, "persisting socket session", errors.Join(err, m.remove(e)))
+		return
+	}
+	m.serve(e)
 	write(w, 201, map[string]string{"id": e.ID, "vault": e.Vault, "socket_path": path})
 }
 
@@ -267,23 +277,34 @@ func (m *Manager) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(m.items, e.ID)
+	if err := m.persist(r.Context()); err != nil {
+		m.internal(w, "persisting socket session deletion", err)
+		return
+	}
 	w.WriteHeader(204)
 }
 
 func (m *Manager) remove(e *entry) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return errors.Join(m.store.DeleteSession(ctx, e.token), e.listener.Close(), e.proxy.Shutdown(ctx))
+	return errors.Join(m.store.DeleteSession(ctx, e.token), stopEntry(ctx, e))
 }
 
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
 	m.closed = true
 	var errs []error
-	for id, e := range m.items {
-		errs = append(errs, m.remove(e))
-		delete(m.items, id)
+	for _, e := range m.items {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		errs = append(errs, stopEntry(ctx, e))
+		cancel()
+	}
+	if m.lock != nil {
+		errs = append(errs, m.lock.Close())
 	}
 	return errors.Join(errs...)
 }
