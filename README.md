@@ -66,6 +66,8 @@ the same mounted directories without respawning.
 Headless mode requires `AGENT_VAULT_REVEAL_DISABLED=true`; credential values
 are write-only for every role, including the host owner agent.
 Telemetry is off by default; build with `-tags notelemetry` to exclude it.
+NanoClaw can host OAuth callbacks while the gateway stays private; configure
+`AGENT_VAULT_OAUTH_REDIRECT_URL` and relay completion over the authenticated API.
 
 Agent Vault is both a vault and proxy service and ships as a single binary that acts as both a server and CLI client. It stores credentials and brokers them to your AI agents using a MITM proxy architecture. By design, Agent Vault is meant to be deployed on a separate machine from your AI agents to provide the security guarantee needed so your AI agents cannot directly access the credentials within Agent Vault.
 

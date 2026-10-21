@@ -854,6 +854,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	mux.HandleFunc("DELETE /v1/credentials", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleCredentialsDelete)))))
 
 	// OAuth credential flow
+	s.registerOAuthRelay(mux, actorAuthed)
 	mux.HandleFunc("POST /v1/credentials/oauth/connect", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleOAuthConnect)))))
 	mux.HandleFunc("GET /v1/oauth/callback", s.requireInitialized(s.handleOAuthCallback))
 	mux.HandleFunc("GET /v1/credentials/oauth/status", s.requireInitialized(s.requireAuth(actorAuthed(s.handleOAuthStatus))))

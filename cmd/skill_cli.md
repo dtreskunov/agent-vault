@@ -26,6 +26,13 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+NanoClaw hosts can complete public OAuth redirects with
+`POST /v1/oauth/complete {state,code}` using their agent bearer token.
+Completion returns `{status,vault,key?,account?,code?,error?}`, never token
+values. States are single-use and expire after ten minutes. Public client
+metadata comes from `GET /v1/oauth/client-metadata`; NanoClaw republishes it at
+its UI origin's `/oauth/client-metadata.json`.
+
 In the NanoClaw headless gateway, credential values are write-only.
 `GET /v1/credentials?reveal=true` (including single-key reads) returns
 `403 credential_reveal_disabled` even for instance owners. Key/metadata lists

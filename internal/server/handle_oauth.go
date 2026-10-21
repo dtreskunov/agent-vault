@@ -16,6 +16,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/oauth"
+	"github.com/Infisical/agent-vault/internal/oauthrelay"
 	"github.com/Infisical/agent-vault/internal/store"
 )
 
@@ -71,6 +72,11 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ClientID == "" {
 		jsonError(w, http.StatusBadRequest, "\"client_id\" is required")
+		return
+	}
+	redirectConfig, err := oauthrelay.Configuration(s.baseURL)
+	if err != nil {
+		jsonError(w, http.StatusServiceUnavailable, "OAuth redirect is not configured correctly")
 		return
 	}
 
@@ -152,7 +158,7 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 		CodeVerifier:  codeVerifier,
 		VaultID:       ns.ID,
 		CredentialKey: req.Key,
-		RedirectURL:   "",
+		RedirectURL:   redirectConfig.RedirectURI,
 		CreatedAt:     now,
 		ExpiresAt:     now.Add(oauthStateTTL),
 	}); err != nil {
@@ -160,7 +166,7 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI := s.baseURL + "/v1/oauth/callback"
+	redirectURI := redirectConfig.RedirectURI
 	authURL := oauth.BuildAuthorizationURL(
 		req.AuthorizationURL, req.ClientID, redirectURI,
 		stateRaw, codeChallenge, req.Scopes, scopeSep, req.DisablePKCE,
@@ -185,87 +191,21 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	stateHash := hashOAuthState(stateRaw)
-
-	st, err := s.store.GetCredentialOAuthStateByHash(ctx, stateHash)
+	config, err := oauthrelay.Configuration(s.baseURL)
 	if err != nil {
-		s.redirectOAuthComplete(w, r, "", "", "error", "Invalid or expired OAuth state")
+		s.redirectOAuthComplete(w, r, "", "", "error", "OAuth redirect is not configured correctly")
 		return
 	}
-
-	if time.Now().After(st.ExpiresAt) {
-		_ = s.store.DeleteCredentialOAuthState(ctx, st.ID)
-		s.redirectOAuthComplete(w, r, "", "", "error", "OAuth state expired — please try again")
-		return
-	}
-
-	_ = s.store.DeleteCredentialOAuthState(ctx, st.ID)
-
-	// Load OAuth config for token exchange.
-	oauthCfg, err := s.store.GetCredentialOAuth(ctx, st.VaultID, st.CredentialKey)
+	result, err := oauthrelay.Complete(r.Context(), s.store, s.encKey, config, oauthrelay.Input{State: stateRaw, Code: code}, nil)
 	if err != nil {
-		s.redirectOAuthComplete(w, r, "", "", "error", "OAuth configuration not found")
+		s.redirectOAuthComplete(w, r, "", "", "error", "Invalid state or OAuth completion failed")
 		return
 	}
-
-	var clientSecret string
-	if len(oauthCfg.ClientSecretCT) > 0 {
-		cs, err := crypto.Decrypt(oauthCfg.ClientSecretCT, oauthCfg.ClientSecretNonce, s.encKey)
-		if err != nil {
-			s.redirectOAuthComplete(w, r, "", "", "error", "Failed to decrypt client secret")
-			return
-		}
-		clientSecret = string(cs)
+	status := "success"
+	if result.Status != "connected" {
+		status = "error"
 	}
-
-	redirectURI := s.baseURL + "/v1/oauth/callback"
-	tok, err := oauth.Exchange(ctx, oauth.ExchangeConfig{
-		TokenURL:        oauthCfg.TokenURL,
-		ClientID:        oauthCfg.ClientID,
-		ClientSecret:    clientSecret,
-		Code:            code,
-		RedirectURI:     redirectURI,
-		CodeVerifier:    st.CodeVerifier,
-		TokenAuthMethod: oauthCfg.TokenAuthMethod,
-	})
-	if err != nil {
-		s.redirectOAuthComplete(w, r, "", "", "error", fmt.Sprintf("Token exchange failed: %v", err))
-		return
-	}
-
-	accessCT, accessNonce, err := crypto.Encrypt([]byte(tok.AccessToken), s.encKey)
-	if err != nil {
-		s.redirectOAuthComplete(w, r, "", "", "error", "Failed to encrypt access token")
-		return
-	}
-
-	var refreshCT, refreshNonce []byte
-	if tok.RefreshToken != "" {
-		refreshCT, refreshNonce, err = crypto.Encrypt([]byte(tok.RefreshToken), s.encKey)
-		if err != nil {
-			s.redirectOAuthComplete(w, r, "", "", "error", "Failed to encrypt refresh token")
-			return
-		}
-	}
-
-	var expiresAt *time.Time
-	if !tok.ExpiresAt.IsZero() {
-		expiresAt = &tok.ExpiresAt
-	}
-
-	if err := s.store.UpdateCredentialOAuthTokens(ctx, st.VaultID, st.CredentialKey, accessCT, accessNonce, refreshCT, refreshNonce, expiresAt); err != nil {
-		s.redirectOAuthComplete(w, r, "", "", "error", "Failed to store tokens")
-		return
-	}
-
-	// Resolve vault name for the redirect.
-	vaultName := ""
-	if v, err := s.store.GetVaultByID(ctx, st.VaultID); err == nil && v != nil {
-		vaultName = v.Name
-	}
-
-	s.redirectOAuthComplete(w, r, vaultName, st.CredentialKey, "success", "")
+	s.redirectOAuthComplete(w, r, result.Vault, result.Key, status, result.Error)
 }
 
 func (s *Server) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {

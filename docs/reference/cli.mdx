@@ -42,6 +42,7 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `AGENT_VAULT_BOOTSTRAP_TOKEN_FILE` | Required headless owner-agent token output (0600); never rotated automatically. Stop the gateway and explicitly run `agent-vault agent rotate nanoclaw-host` with the same environment to recover it. |
     | `AGENT_VAULT_SOCKET_ROOT` | Enable socket sessions. Existing absolute session directories must resolve beneath this root; relative root paths use the working directory. |
     | `AGENT_VAULT_UNMATCHED_HOST_MODE` | Unmatched CONNECT default: `tunnel`, `mitm` (upstream-compatible default), or `deny`; overridden by vault setting `unmatched_host_mode`. |
+    | `AGENT_VAULT_OAUTH_REDIRECT_URL` | Public HTTPS OAuth callback hosted by NanoClaw. HTTP is accepted only on loopback for local testing. Defaults to the server's `/v1/oauth/callback`; also determines the CIMD publication URL. |
     | `AGENT_VAULT_LOG_LEVEL` | Fallback for `--log-level` when the flag is not set. Accepts `info` or `debug`. |
     | `AGENT_VAULT_MAX_RESPONSE_BYTES` | Maximum response body bytes streamed to agents (default `0` = unlimited). The `--max-response-bytes` flag takes precedence. |
     | `AGENT_VAULT_MAX_REQUEST_BYTES` | Maximum request body bytes forwarded to upstreams (default `1073741824` = 1 GiB). The `--max-request-bytes` flag takes precedence. |

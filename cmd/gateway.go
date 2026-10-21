@@ -8,6 +8,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/blindtunnel"
 	"github.com/Infisical/agent-vault/internal/gatewayconfig"
 	"github.com/Infisical/agent-vault/internal/headless"
+	"github.com/Infisical/agent-vault/internal/oauthrelay"
 	"github.com/Infisical/agent-vault/internal/pidfile"
 	"github.com/Infisical/agent-vault/internal/revealpolicy"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -71,5 +72,8 @@ func loadGatewayEnv() {
 	}
 	if gatewayEnvErr == nil {
 		_, gatewayEnvErr = revealpolicy.Environment()
+	}
+	if gatewayEnvErr == nil && os.Getenv("AGENT_VAULT_OAUTH_REDIRECT_URL") != "" {
+		_, gatewayEnvErr = oauthrelay.Configuration("")
 	}
 }

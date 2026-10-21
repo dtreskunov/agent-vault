@@ -221,6 +221,30 @@ The existing `unmatched_host_policy` still controls decrypted HTTP requests
 and plain-HTTP forwarding; it is distinct from the pre-TLS CONNECT mode.
 In particular, `unmatched_host_mode=deny` alone is not a plain-HTTP deny policy.
 
+## OAuth redirect relay (F11)
+
+Set `AGENT_VAULT_OAUTH_REDIRECT_URL=https://your-ui.example/oauth/callback`
+before starting a flow. The gateway uses this exact URI for both authorization
+and token exchange, saving it with the state so a restart or configuration
+change cannot silently alter an in-flight flow. Without the setting, upstream's
+`<server base URL>/v1/oauth/callback` remains the default. HTTP callbacks are
+accepted only on loopback for isolated development.
+
+NanoClaw hosts the browser callback and forwards `{state,code}` with the host
+bearer token to `POST /v1/oauth/complete`. The gateway returns JSON:
+`{status:"connected"|"failed",vault,key?,account?,code?,error?}`. A consent denial
+can instead forward `{state,error:"access_denied"}`. Token values never appear
+in completion responses or error messages. The caller must have member-or-admin
+access to the state's vault; a socket proxy session cannot complete a flow.
+States expire after ten minutes and can be consumed only once, including
+concurrent requests. Invalid, expired or replayed states return `400 invalid_state`.
+
+`GET /v1/oauth/client-metadata` returns the public client metadata document.
+NanoClaw publishes it at `<UI origin>/oauth/client-metadata.json`; its `client_id`
+is that public URL, not the private gateway URL. The document advertises the
+configured callback, code/refresh grants and public-client authentication.
+The ordinary upstream browser callback remains available for non-relay use.
+
 ## Telemetry and fork guard (F9)
 
 Telemetry is off by default. An operator can opt in with `--telemetry` or
