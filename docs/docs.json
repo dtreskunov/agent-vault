@@ -53,6 +53,7 @@
               "guides/connect-coding-agent",
               "guides/connect-custom-agent",
               "guides/nanoclaw-gateway",
+              "guides/mcp-oauth",
               "guides/slack-agent-template",
               "guides/deploy-agent-container",
               "guides/hermes-on-vps",

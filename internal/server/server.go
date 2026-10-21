@@ -25,6 +25,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/headless"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
+	"github.com/Infisical/agent-vault/internal/mcpauth"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/notify"
 	"github.com/Infisical/agent-vault/internal/oauth"
@@ -62,6 +63,7 @@ type agentVaultJSON struct {
 
 // Server is the Agent Vault HTTP server.
 type Server struct {
+	mcpOAuth *mcpauth.Manager
 	mux *http.ServeMux
 	socketSessions *socketsessions.Manager
 	httpServer  *http.Server
@@ -203,7 +205,7 @@ func (s *Server) SessionResolver() brokercore.SessionResolver {
 // this server's store and encryption key.
 func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 	p := &brokercore.StoreCredentialProvider{
-		Store:      credentialStoreAdapter{s.store},
+		Store:      gatewayCredentialStore{credentialStoreAdapter{s.store}, s.mcpOAuth},
 		OAuthStore: credentialStoreAdapter{s.store},
 		EncKey:     s.encKey,
 		Refresher:  s.oauthRefresher,

@@ -26,6 +26,8 @@ type TokenResponse struct {
 
 // ExchangeConfig configures an authorization-code token exchange.
 type ExchangeConfig struct {
+	Client          *http.Client
+	Resource        string
 	TokenURL        string
 	ClientID        string
 	ClientSecret    string
@@ -37,6 +39,8 @@ type ExchangeConfig struct {
 
 // RefreshConfig configures a refresh-token grant.
 type RefreshConfig struct {
+	Client          *http.Client
+	Resource        string
 	TokenURL        string
 	ClientID        string
 	ClientSecret    string
@@ -76,6 +80,9 @@ func Exchange(ctx context.Context, cfg ExchangeConfig) (*TokenResponse, error) {
 	if cfg.CodeVerifier != "" {
 		form.Set("code_verifier", cfg.CodeVerifier)
 	}
+	if cfg.Resource != "" {
+		form.Set("resource", cfg.Resource)
+	}
 
 	authMethod := cfg.TokenAuthMethod
 	if authMethod == "" {
@@ -95,7 +102,7 @@ func Exchange(ctx context.Context, cfg ExchangeConfig) (*TokenResponse, error) {
 		req.SetBasicAuth(cfg.ClientID, cfg.ClientSecret)
 	}
 
-	return doTokenRequest(req)
+	return doTokenRequest(req, cfg.Client)
 }
 
 // Refresh performs a refresh_token grant per RFC 6749 §6.
@@ -103,6 +110,9 @@ func Refresh(ctx context.Context, cfg RefreshConfig) (*TokenResponse, error) {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {cfg.RefreshToken},
+	}
+	if cfg.Resource != "" {
+		form.Set("resource", cfg.Resource)
 	}
 
 	if cfg.Scopes != "" {
@@ -133,13 +143,15 @@ func Refresh(ctx context.Context, cfg RefreshConfig) (*TokenResponse, error) {
 		req.SetBasicAuth(cfg.ClientID, cfg.ClientSecret)
 	}
 
-	return doTokenRequest(req)
+	return doTokenRequest(req, cfg.Client)
 }
 
 // applyClientAuth adds client credentials to the form body when using
 // client_secret_post. For client_secret_basic the caller sets the header.
 func applyClientAuth(form url.Values, clientID, clientSecret, method string) {
 	switch method {
+	case "none":
+		form.Set("client_id", clientID)
 	case "client_secret_basic":
 		// client_id is still sent in the body per some providers' expectations,
 		// but credentials go in the Authorization header (set by caller).
@@ -162,16 +174,23 @@ var defaultTokenClient = func() *http.Client {
 // Override this at init time to inject network guards (e.g., SSRF protection).
 var TokenClient = defaultTokenClient
 
-func doTokenRequest(req *http.Request) (*TokenResponse, error) {
-	resp, err := TokenClient.Do(req)
+func doTokenRequest(req *http.Request, client *http.Client) (*TokenResponse, error) {
+	if client == nil {
+		client = TokenClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: sending token request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	const maxTokenResponse = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponse+1))
 	if err != nil {
 		return nil, fmt.Errorf("oauth: reading token response: %w", err)
+	}
+	if len(body) > maxTokenResponse {
+		return nil, fmt.Errorf("oauth: token response exceeds 1 MiB")
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

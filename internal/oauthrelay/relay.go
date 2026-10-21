@@ -64,9 +64,10 @@ type Store interface {
 }
 
 type Input struct {
-	State string `json:"state"`
-	Code  string `json:"code"`
-	Error string `json:"error,omitempty"`
+	State  string `json:"state"`
+	Code   string `json:"code"`
+	Issuer string `json:"iss,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 type Result struct {

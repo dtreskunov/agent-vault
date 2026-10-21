@@ -865,7 +865,7 @@ func (s *Server) handleVaultDelete(w http.ResponseWriter, r *http.Request) {
 	// rows, so the set to revoke (incl. DB-only orphans) must be captured first.
 	// revokeDynamicLeases collects synchronously, then revokes in the background.
 	s.revokeDynamicLeases(v.ID)
-	if err := s.store.DeleteVault(r.Context(), name); err != nil {
+	if err := s.deleteGatewayVault(r.Context(), v.ID, name); err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to delete vault")
 		return
 	}

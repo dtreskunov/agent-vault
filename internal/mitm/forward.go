@@ -330,7 +330,7 @@ func (p *Proxy) forwardRequest(
 		if len(wsSubs) > 0 {
 			outReq.Header.Del("Sec-Websocket-Extensions")
 		}
-		p.forwardWebSocket(w, r, outReq, wsSubs, emit)
+		p.forwardWebSocket(w, r, outReq, wsSubs, scope.VaultID, inject.CredentialKeys, emit)
 		return
 	}
 
@@ -373,6 +373,10 @@ func (p *Proxy) forwardRequest(
 	}
 
 	defer func() { _ = resp.Body.Close() }()
+
+	if !p.applyResponsePolicy(w, r, resp, scope.VaultID, inject.CredentialKeys, emit) {
+		return
+	}
 
 	if p.maxResponseBytes > 0 && resp.ContentLength > 0 && resp.ContentLength > p.maxResponseBytes {
 		_ = resp.Body.Close()

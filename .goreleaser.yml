@@ -35,6 +35,8 @@ archives:
     files:
       - LICENSE*
       - README*
+      - internal/mcpauth/oauthex/LICENSE
+      - internal/mcpauth/oauthex/NOTICE
 
 checksum:
   name_template: "checksums.txt"
@@ -98,6 +100,8 @@ dockers:
       - "--platform=linux/amd64"
     extra_files:
       - scripts/docker-entrypoint.sh
+      - internal/mcpauth/oauthex/LICENSE
+      - internal/mcpauth/oauthex/NOTICE
 
   - id: arm64
     goos: linux
@@ -110,6 +114,8 @@ dockers:
       - "--platform=linux/arm64"
     extra_files:
       - scripts/docker-entrypoint.sh
+      - internal/mcpauth/oauthex/LICENSE
+      - internal/mcpauth/oauthex/NOTICE
 
 docker_manifests:
   - name_template: "infisical/agent-vault:{{ .Version }}"

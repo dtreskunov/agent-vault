@@ -35,6 +35,7 @@ RUN apk add --no-cache ca-certificates \
     && mkdir -p /data/.agent-vault && chown -R agentvault:agentvault /data
 
 COPY --from=builder /agent-vault /usr/local/bin/agent-vault
+COPY --from=builder /src/internal/mcpauth/oauthex/LICENSE /src/internal/mcpauth/oauthex/NOTICE /usr/share/licenses/agent-vault/mcp-sdk/
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

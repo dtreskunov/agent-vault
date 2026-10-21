@@ -240,6 +240,7 @@ func attachMITMIfEnabled(srv *server.Server, host string, mitmPort int, masterKe
 	srv.AttachMITM(mitm.New(
 		net.JoinHostPort(host, strconv.Itoa(mitmPort)),
 		mitm.Options{
+			FilterResponse:   srv.FilterMCPResponse,
 			ConnectPolicy:    blindtunnel.Policy{Store: db}.Decide,
 			CA:               caProv,
 			Sessions:         srv.SessionResolver(),

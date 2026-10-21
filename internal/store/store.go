@@ -39,7 +39,7 @@ type Credential struct {
 	ID         string
 	VaultID    string
 	Key        string
-	Type       string // "static" (default) or "oauth"
+	Type       string // "static" (default), "oauth" or "mcp_oauth"
 	Ciphertext []byte
 	Nonce      []byte
 	CreatedAt  time.Time

@@ -27,11 +27,22 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 ## When to use this
 
 NanoClaw hosts can complete public OAuth redirects with
-`POST /v1/oauth/complete {state,code}` using their agent bearer token.
+`POST /v1/oauth/complete {state,code,iss?}` using their agent bearer token.
 Completion returns `{status,vault,key?,account?,code?,error?}`, never token
 values. States are single-use and expire after ten minutes. Public client
 metadata comes from `GET /v1/oauth/client-metadata`; NanoClaw republishes it at
 its UI origin's `/oauth/client-metadata.json`.
+
+For MCP OAuth, the host probes/starts sign-in with
+`POST /v1/vaults/{vault}/mcp-oauth/probe` or `/start`, body `{resource_url}`.
+Start returns `{state,authorize_url}`. Forward the public callback's `iss`
+unchanged; providers advertising RFC 9207 require it. List metadata with
+`GET /v1/vaults/{vault}/mcp-oauth` and disconnect with
+`DELETE /v1/vaults/{vault}/mcp-oauth/{key}`. Start/delete require vault admin;
+list/probe require member. Dynamic clients and tokens are isolated per vault.
+`registration_unsupported` may include a catalog `provider` that needs an
+OAuth app. A `needs_reconnect` account requires a new human sign-in, not a
+credential reveal or repeated registration by the container.
 
 In the NanoClaw headless gateway, credential values are write-only.
 `GET /v1/credentials?reveal=true` (including single-key reads) returns

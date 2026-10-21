@@ -1,0 +1,151 @@
+---
+title: "MCP OAuth"
+description: "Vault-isolated MCP sign-in through a private credential gateway."
+---
+
+## Deployment
+
+Use the [headless gateway configuration](/guides/nanoclaw-gateway), including
+`AGENT_VAULT_REVEAL_DISABLED=true`. Set
+`AGENT_VAULT_OAUTH_REDIRECT_URL=https://your-ui.example/oauth/callback`.
+NanoClaw hosts that browser callback and publishes the document returned by
+`GET /v1/oauth/client-metadata` at its origin's `/oauth/client-metadata.json`.
+Do not deploy a second public gateway listener.
+
+All management calls below use the host agent's bearer token. Starting and
+disconnecting require vault admin access because they change the vault's
+services; listing and probing require vault member access. Proxy-role socket
+sessions cannot manage accounts.
+
+## API
+
+| Purpose | Request | Response |
+| --- | --- | --- |
+| Probe | `POST /v1/vaults/{vault}/mcp-oauth/probe {resource_url}` | `200 {oauth,issuer?,client?,code?,provider?}` |
+| Start | `POST /v1/vaults/{vault}/mcp-oauth/start {resource_url}` | `200 {state,authorize_url}` |
+| Complete | `POST /v1/oauth/complete {state,code,iss?}` | `200 {status,vault,key?,account?,code?,error?}` |
+| List | `GET /v1/vaults/{vault}/mcp-oauth` | `200 [{key,resource_url,account,connected_at,last_used_at,updated_at,status,client,scopes}]` |
+| Disconnect | `DELETE /v1/vaults/{vault}/mcp-oauth/{key}` | `204`; unknown account: `404` |
+
+Open `authorize_url` in the user's browser. The public callback forwards
+`state`, `code` and the provider's `iss` parameter unchanged. Servers
+advertising RFC 9207 support (including Linear) require an exact matching
+issuer; missing or mismatched values produce a failed result with
+`code:"issuer_mismatch"`. A declined consent can instead forward
+`{state,error:"access_denied",iss?}`.
+
+States expire after ten minutes, are encrypted in the database, survive a
+gateway restart and are consumed once, even with concurrent completions.
+The completing caller must have member-or-admin access to the state's vault.
+Invalid, expired or replayed states return `400 invalid_state`. Account
+identity is `null` when the provider has not supplied verified identity data;
+the gateway does not invent an account name or decode an unverified ID token.
+
+The optional progress-polling endpoint is not implemented. NanoClaw uses the
+completion result and notifies the opening window, then reloads the account
+list. Account status is `connected` or `needs_reconnect`; client kind is
+`registered`, `app` or `metadata`.
+
+## Discovery and client isolation
+
+The gateway probes the MCP URL without credentials, reads RFC 9728 protected
+resource metadata from the challenge or well-known path, then discovers the
+authorization server with RFC 8414 and OIDC fallback. Issuers, resource
+identifiers, endpoint schemes and S256 PKCE support are validated.
+
+When RFC 7591 registration is offered, each **(vault, issuer)** gets its own
+client. The registration ID, issued secret, management URI and registration
+access token are encrypted in that vault. Different vaults never reuse a
+dynamic registration. Confidential client authentication is retained when
+the server requires it.
+
+Without registration, client selection tries the vault's configured catalog
+app, then the install-wide app, then the public client-metadata URL if the
+server advertises CIMD support. If none applies, the error is
+`registration_unsupported`; a matching catalog issuer includes `provider`
+(`google` or `github`). OAuth-app storage/lookup primitives are present, but
+the install/vault app-management HTTP APIs and GitHub MCP acceptance belong
+to the subsequent P4 work, not this delivery.
+
+Probing does not register a client or begin a sign-in. All discovery,
+registration, exchange, refresh and cleanup traffic uses the network guard.
+Private destinations require the instance-wide `AGENT_VAULT_NETWORK_ALLOWLIST`;
+there are no per-vault network settings. Cloud metadata stays blocked.
+Redirects cannot downgrade HTTPS, and credential-bearing POSTs are not
+automatically redirected.
+
+## Tokens, services and refresh
+
+Authorization uses S256 PKCE and the metadata's canonical `resource`
+identifier. Both code exchange and refresh send that same RFC 8707 resource.
+Refresh-token rotation is persisted. Refreshes are serialized under the
+vault's existing lock, so concurrent requests share the updated token rather
+than reusing a rotated refresh token.
+
+Completion atomically stores the `mcp_oauth` credential, encrypted account and
+service configuration. The generated bearer services cover the MCP endpoint
+and descendants, but not similarly named sibling paths. Existing unrelated
+services are retained. An exact destination collision returns
+`409 service_conflict` rather than claiming a connection whose service would
+be shadowed. A concurrent non-MCP credential collision likewise fails with
+`409 credential_conflict`. Failed commits leave no half-written account or
+credential, and newly issued unused tokens are revoked where supported.
+
+Generated `MCP_…` credentials are managed through these account endpoints;
+ordinary credential edits/deletes and legacy OAuth uploads cannot overwrite
+them. The standard reveal-disabled boundary still applies to every role.
+Account, registration and management secrets are never returned by these APIs.
+
+On `invalid_client`, the gateway re-registers a dynamic client once and marks
+accounts issued to the old client as needing a new sign-in. It does not retry
+an old authorization code under the new client or keep registering on every
+proxy request. Permanent refresh failures also require reconnection.
+
+The proxy strips `resource_metadata` from 401 challenges on managed MCP
+services, including failed WebSocket upgrade responses, while preserving
+ordinary challenge information. Container SDKs therefore do not start their
+own OAuth registration flow.
+
+`connected_at` and `updated_at` are persisted. `last_used_at` is recorded when
+a token is resolved for injection, with writes coalesced to at most once per
+minute per account. It denotes use for an outbound attempt, not proof that
+the upstream accepted the request.
+
+## Disconnect and deletion
+
+Disconnect revokes access/refresh tokens and uses RFC 7592 client deletion
+when the registration provides a management URI and token. A registration shared by several resources in the **same vault** is retained
+while another account or pending sign-in uses it. No other vault is affected.
+
+Remote cleanup is best-effort: unsupported or unreachable cleanup endpoints
+are logged, but local disconnect still removes the encrypted account,
+credential, generated services and pending flows for that account. Local
+database failures are returned as errors. Deleting a vault performs remote
+cleanup before the database's atomic cascade removes its records.
+
+## Validation
+
+Discovery and registration reuse the MCP Go SDK v1.8.0 `oauthex` sources.
+The pinned source subset, full upstream license and local-change NOTICE are
+under `internal/mcpauth/oauthex/`; no new Go module is required. Release archives
+include those notices, and images retain them under
+`/usr/share/licenses/agent-vault/mcp-sdk/`.
+
+```bash
+go test -mod=readonly -race ./internal/mcpauth/... ./internal/oauth ./internal/oauthrelay ./internal/server ./internal/mitm
+CGO_ENABLED=0 go build -mod=readonly -tags notelemetry -trimpath -ldflags='-s -w' -o agent-vault .
+```
+
+Use an isolated HOME and non-default ports for process-level tests; do not
+replace the live canary binary or restart its service.
+
+The local tests cover two-vault client isolation, code/refresh resource
+binding, PKCE, OIDC/CIMD and configured-app fallback, rotation, one-time
+re-registration, issuer/replay/expiry checks, transaction rollback,
+Unix-socket injection, challenge filtering and disconnect/vault cleanup.
+
+Live Linear discovery and two distinct vault-scoped registrations were
+verified against `https://mcp.linear.app/mcp` from an isolated gateway.
+Browser consent, real token exchange/refresh and a container socket call
+using a real Linear account are explicitly deferred to NanoClaw deployment;
+these are not claimed as completed acceptance.

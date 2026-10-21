@@ -94,6 +94,14 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Lazily expire old states.
+	unlock, ok := s.lockCredentialMutation(w, ctx, ns.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	if !s.assertNotMCPManaged(w, ctx, ns.ID, req.Key) {
+		return
+	}
 	_, _ = s.store.ExpireCredentialOAuthStates(ctx, time.Now())
 
 	// Handle client_secret: sentinel = keep current, empty = clear, other = set new.
@@ -178,6 +186,9 @@ func (s *Server) handleOAuthConnect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	stateRaw := r.URL.Query().Get("state")
+	if s.mcpBrowserCallback(w, r, stateRaw) {
+		return
+	}
 
 	if code == "" || stateRaw == "" {
 		errMsg := r.URL.Query().Get("error_description")
@@ -304,6 +315,14 @@ func (s *Server) handleOAuthTokenUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Resolve OAuth config: use request fields, fall back to existing config.
+	unlock, ok := s.lockCredentialMutation(w, ctx, ns.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	if !s.assertNotMCPManaged(w, ctx, ns.ID, req.Key) {
+		return
+	}
 	existing, _ := s.store.GetCredentialOAuth(ctx, ns.ID, req.Key)
 	tokenURL := req.TokenURL
 	clientID := req.ClientID

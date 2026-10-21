@@ -230,7 +230,7 @@ change cannot silently alter an in-flight flow. Without the setting, upstream's
 `<server base URL>/v1/oauth/callback` remains the default. HTTP callbacks are
 accepted only on loopback for isolated development.
 
-NanoClaw hosts the browser callback and forwards `{state,code}` with the host
+NanoClaw hosts the browser callback and forwards `{state,code,iss?}` with the host
 bearer token to `POST /v1/oauth/complete`. The gateway returns JSON:
 `{status:"connected"|"failed",vault,key?,account?,code?,error?}`. A consent denial
 can instead forward `{state,error:"access_denied"}`. Token values never appear
@@ -244,6 +244,11 @@ NanoClaw publishes it at `<UI origin>/oauth/client-metadata.json`; its `client_i
 is that public URL, not the private gateway URL. The document advertises the
 configured callback, code/refresh grants and public-client authentication.
 The ordinary upstream browser callback remains available for non-relay use.
+
+For MCP sign-ins, forward the callback's `iss` value unchanged. Providers that
+advertise RFC 9207 support require it to match the issuer pinned to the state.
+See [MCP OAuth](/guides/mcp-oauth) for per-vault registration, account APIs,
+resource-bound refresh and the remaining deployment acceptance.
 
 ## Telemetry and fork guard (F9)
 

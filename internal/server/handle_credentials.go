@@ -55,7 +55,15 @@ func (s *Server) handleCredentialsSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	unlock, ok := s.lockCredentialMutation(w, ctx, ns.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
 	for key := range req.Credentials {
+		if !s.assertNotMCPManaged(w, ctx, ns.ID, key) {
+			return
+		}
 		if !broker.CredentialKeyPattern.MatchString(key) {
 			jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid credential key %q: must be SCREAMING_SNAKE_CASE (e.g. STRIPE_KEY)", key))
 			return
@@ -374,6 +382,16 @@ func (s *Server) handleCredentialsDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	unlock, ok := s.lockCredentialMutation(w, ctx, ns.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	for _, key := range req.Keys {
+		if !s.assertNotMCPManaged(w, ctx, ns.ID, key) {
+			return
+		}
+	}
 	var deleted []string
 	for _, key := range req.Keys {
 		if err := s.store.DeleteCredential(ctx, ns.ID, key); err != nil {

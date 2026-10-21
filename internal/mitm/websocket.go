@@ -57,6 +57,8 @@ func (p *Proxy) forwardWebSocket(
 	r *http.Request,
 	outReq *http.Request,
 	wsSubs []brokercore.ResolvedSubstitution,
+	vault string,
+	keys []string,
 	emit func(status int, errCode string),
 ) {
 	upstreamConn, upstreamReader, resp, err := p.dialWebSocketUpstream(r.Context(), outReq)
@@ -73,6 +75,9 @@ func (p *Proxy) forwardWebSocket(
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		defer func() { _ = resp.Body.Close() }()
+		if !p.applyResponsePolicy(w, r, resp, vault, keys, emit) {
+			return
+		}
 
 		if p.maxResponseBytes > 0 && resp.ContentLength > 0 && resp.ContentLength > p.maxResponseBytes {
 			brokercore.WriteProxyError(w, http.StatusBadGateway, "response_too_large",

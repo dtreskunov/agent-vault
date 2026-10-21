@@ -1,0 +1,16 @@
+This directory contains selected sources from github.com/modelcontextprotocol/go-sdk
+v1.8.0, commit eeddd84 (see the full upstream LICENSE retained in this directory).
+Copyright 2025-2026 The Go MCP SDK Authors. All rights reserved.
+
+Upstream is transitioning from MIT to Apache-2.0; the original source notices
+and complete upstream license text are retained.
+
+Local modifications:
+- Import paths point to the copied standard-library-only internal helpers.
+- JSON decoding uses Go's encoding/json rather than the SDK's segmentio wrapper,
+  avoiding the SDK dependency tree.
+- Dynamic-registration responses retain the RFC 7592 management URI and token.
+- Literal private IPs are not pre-rejected by URL validation: the supplied
+  Agent Vault dialer enforces its instance allowlist on the connected address.
+
+Agent Vault supplies its guarded HTTP client to discovery and registration.

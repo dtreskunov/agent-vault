@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/Infisical/agent-vault/internal/oauthrelay"
 )
 
 func (s *Server) registerOAuthRelay(mux *http.ServeMux, authed func(http.HandlerFunc) http.HandlerFunc) {
+	s.registerMCPOAuth(mux, authed)
 	mux.HandleFunc("POST /v1/oauth/complete", s.requireInitialized(s.requireAuth(authed(limitBody(s.handleOAuthRelayComplete)))))
 	mux.HandleFunc("GET /v1/oauth/client-metadata", s.requireInitialized(s.handleOAuthClientMetadata))
 }
@@ -34,12 +36,16 @@ func (s *Server) handleOAuthRelayComplete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	denied := false
-	result, err := oauthrelay.Complete(r.Context(), s.store, s.encKey, config, input, func(vaultID string) error {
+	result, err := s.completeGatewayOAuth(r, config, input, func(vaultID string) error {
 		_, err := s.requireVaultMember(w, r, vaultID)
 		denied = err != nil
 		return err
 	})
 	if denied {
+		return
+	}
+	if err != nil && strings.HasPrefix(input.State, "mcp_oast_") {
+		s.mcpError(w, err)
 		return
 	}
 	if errors.Is(err, oauthrelay.ErrState) {
