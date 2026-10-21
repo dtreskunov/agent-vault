@@ -10,7 +10,7 @@ import (
 var tel *telemetry.Telemetry
 
 func init() {
-	rootCmd.PersistentFlags().Bool("telemetry", true, "enable anonymous usage telemetry (also respects AGENT_VAULT_TELEMETRY env var)")
+	rootCmd.PersistentFlags().Bool("telemetry", false, "opt in to anonymous usage telemetry (AGENT_VAULT_TELEMETRY env var takes precedence)")
 	cobra.OnInitialize(initTelemetry)
 }
 
@@ -19,10 +19,8 @@ func initTelemetry() {
 	if gatewayEnvErr != nil {
 		return
 	}
-	if telemetry.IsDisabled() {
-		return
-	}
-	if ok, _ := rootCmd.PersistentFlags().GetBool("telemetry"); !ok {
+	flag, _ := rootCmd.PersistentFlags().GetBool("telemetry")
+	if !telemetry.Enabled(flag) {
 		return
 	}
 	tel = telemetry.New(posthogAPIKey, version)

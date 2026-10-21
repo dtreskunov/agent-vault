@@ -84,8 +84,14 @@ GCP IAM and GCP ID Token share `INFISICAL_GCP_AUTH_IDENTITY_ID`; setting `INFISI
 
 ## Telemetry
 
-Agent Vault collects anonymous usage telemetry to help improve the product. No credential values, request payloads, or secret data are ever included. Events capture command invocations and feature usage with the authenticated user's email for company attribution.
+Telemetry is off by default in this fork. Operators may opt in with
+`--telemetry` or `AGENT_VAULT_TELEMETRY=true`; an explicit environment value
+takes precedence over the flag. When enabled, events capture command
+invocations and feature usage with the authenticated user's email for company
+attribution, but no credential values or request payloads. Building with
+`-tags notelemetry` removes the telemetry implementation and its PostHog and
+machine-ID dependencies; flags and environment variables cannot re-enable it.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `AGENT_VAULT_TELEMETRY` | Optional (defaults to `true`) | Set to `false` to disable anonymous usage telemetry. Also overridable with `--telemetry=false` on the CLI. |
+| `AGENT_VAULT_TELEMETRY` | Optional (defaults to `false`) | `true` opts in, `false` opts out; overrides `--telemetry`. Invalid values log a warning and disable telemetry. The install beacon separately requires explicit `true`; `AGENT_VAULT_NO_TELEMETRY` overrides that beacon opt-in. |

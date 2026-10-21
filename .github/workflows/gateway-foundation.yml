@@ -1,0 +1,45 @@
+name: Gateway foundation
+
+on:
+  pull_request:
+  push:
+    branches: [bananaclaw, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Reject enterprise-only directories
+        run: python3 scripts/check-no-ee.py
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Stub webdist for go:embed
+        run: |
+          mkdir -p internal/server/webdist
+          printf '<!doctype html><title>ci-stub</title>' > internal/server/webdist/index.html
+
+      - name: Run tests with readonly modules
+        run: go test -mod=readonly -race -count=1 ./...
+
+      - name: Test telemetry-free build
+        run: |
+          go test -mod=readonly -tags notelemetry ./internal/telemetry ./cmd
+          CGO_ENABLED=0 go build -mod=readonly -tags notelemetry -trimpath -o agent-vault .
+          dependencies=$(go list -mod=readonly -tags notelemetry -deps .)
+          if printf '%s\n' "$dependencies" | grep -E 'github.com/(posthog|denisbrodbeck/machineid)'; then
+            echo "Telemetry dependencies remain in the notelemetry build"
+            exit 1
+          fi

@@ -221,6 +221,27 @@ The existing `unmatched_host_policy` still controls decrypted HTTP requests
 and plain-HTTP forwarding; it is distinct from the pre-TLS CONNECT mode.
 In particular, `unmatched_host_mode=deny` alone is not a plain-HTTP deny policy.
 
+## Telemetry and fork guard (F9)
+
+Telemetry is off by default. An operator can opt in with `--telemetry` or
+`AGENT_VAULT_TELEMETRY=true` in an ordinary build; the environment takes
+precedence. The installer beacon also requires explicit opt-in and still
+honors `AGENT_VAULT_NO_TELEMETRY`.
+
+For an unconditional telemetry-free gateway, build with:
+
+```bash
+CGO_ENABLED=0 go build -mod=readonly -tags notelemetry -trimpath -ldflags='-s -w' -o agent-vault .
+```
+
+This build excludes PostHog and machine-ID code. Neither `--telemetry` nor
+an environment value can re-enable collection.
+
+The Gateway foundation CI workflow runs on fork pushes and pull requests.
+It fails if an `ee/` directory appears anywhere outside Git metadata, runs
+the full suite with readonly modules, and checks the telemetry-free build.
+Run the same source-tree guard locally with `python3 scripts/check-no-ee.py`.
+
 ## Reproducible validation
 
 ```bash

@@ -1,10 +1,11 @@
+//go:build !notelemetry
+
 package telemetry
 
 import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -82,13 +83,6 @@ func (t *Telemetry) Close() {
 		return
 	}
 	_ = t.client.Close()
-}
-
-// IsDisabled returns true when the AGENT_VAULT_TELEMETRY env var is
-// set to "false" or "0".
-func IsDisabled() bool {
-	v := strings.ToLower(os.Getenv("AGENT_VAULT_TELEMETRY"))
-	return v == "false" || v == "0"
 }
 
 var (

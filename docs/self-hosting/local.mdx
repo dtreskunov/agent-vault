@@ -14,7 +14,7 @@ Auto-detects your OS and architecture, downloads the latest release, and install
 Supports macOS (Intel + Apple Silicon) and Linux (x86\_64 + ARM64).
 
 <Note>
-  The install script sends an anonymous beacon (OS, architecture, version). Set `AGENT_VAULT_NO_TELEMETRY=1` in front of `sh` to opt out.
+  The install beacon is off by default in this fork. Setting `AGENT_VAULT_TELEMETRY=true` in front of `sh` opts in (OS, architecture, version only); `AGENT_VAULT_NO_TELEMETRY=1` keeps it off even if telemetry was opted in.
 </Note>
 
 Verify the installation:

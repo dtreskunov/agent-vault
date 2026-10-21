@@ -7,8 +7,8 @@ set -e
 # Supports: macOS (Intel + Apple Silicon), Linux (amd64 + arm64)
 # Works for both fresh install and upgrade.
 #
-# Privacy: on successful install, sends an anonymous ping with OS, arch,
-# and version only — no identifiers, no IP retention. Opt out with:
+# Privacy: the install beacon is off by default; opt in with
+# AGENT_VAULT_TELEMETRY=true. AGENT_VAULT_NO_TELEMETRY always overrides it:
 #   curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL https://get.agent-vault.dev | AGENT_VAULT_NO_TELEMETRY=1 sh
 
 REPO="Infisical/agent-vault"
@@ -190,8 +190,8 @@ main() {
     fi
 
     # Anonymous completion beacon. No PII, no identifiers.
-    # Opt out: AGENT_VAULT_NO_TELEMETRY=1
-    if [ -z "$AGENT_VAULT_NO_TELEMETRY" ]; then
+    # Explicit opt-in only; the installer opt-out always wins.
+    if [ "$AGENT_VAULT_TELEMETRY" = "true" ] && [ -z "$AGENT_VAULT_NO_TELEMETRY" ]; then
         EVENT="install"
         if [ -n "$EXISTING_VERSION" ] && [ "$EXISTING_VERSION" != "unknown" ]; then
             EVENT="upgrade"
