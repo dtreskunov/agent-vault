@@ -37,13 +37,71 @@ with default-vault admin access. Its token is atomically written with mode 0600.
 Later boots validate the existing file and never silently replace it. Keep
 the token on the host, never in a container mount.
 
-For host-side CLI administration without printing the token:
+### Host-side REST administration
 
-```bash
-AGENT_VAULT_ADDR=http://127.0.0.1:14321 \
-AGENT_VAULT_TOKEN_FILE=data/agent-vault/host-token \
-agent-vault vault create ag-1780956116163-prz9h2
+NanoClaw administers the headless gateway over REST, not the administrative
+CLI. `agent-vault vault create` and `agent-vault vault service` require a
+saved human login session; setting `AGENT_VAULT_TOKEN_FILE` does not make
+those commands use the host agent's token.
+
+The host's gateway client reads the token from the file configured by
+`AGENT_VAULT_BOOTSTRAP_TOKEN_FILE` and sends it as `Authorization: Bearer
+<host token>` on each request to `http://127.0.0.1:14321`. Keep token and
+credential values out of logs, command-line arguments and container mounts.
+The placeholders below are not literal values to send.
+
+Create the group's vault; the host agent becomes its admin:
+
+```http
+POST /v1/vaults HTTP/1.1
+Host: 127.0.0.1:14321
+Authorization: Bearer <host token>
+Content-Type: application/json
+
+{"name":"ag-1780956116163-prz9h2"}
 ```
+
+Set credentials, with the vault explicitly selected in the JSON body:
+
+```http
+POST /v1/credentials HTTP/1.1
+Host: 127.0.0.1:14321
+Authorization: Bearer <host token>
+Content-Type: application/json
+
+{"vault":"ag-1780956116163-prz9h2","credentials":{"EXAMPLE_API_KEY":"<credential value supplied by the operator>"}}
+```
+
+Replace the vault's complete service list:
+
+```http
+PUT /v1/vaults/ag-1780956116163-prz9h2/services HTTP/1.1
+Host: 127.0.0.1:14321
+Authorization: Bearer <host token>
+Content-Type: application/json
+
+{"services":[{"name":"example","host":"api.example.com/v1/*","auth":{"type":"bearer","token":"EXAMPLE_API_KEY"}}]}
+```
+
+PUT replaces all services, so include every service the vault should retain.
+Credential and service writes are separate requests, not one atomic update.
+
+Keep unmatched CONNECT targets in tunnel mode:
+
+```http
+PATCH /v1/vaults/ag-1780956116163-prz9h2/settings HTTP/1.1
+Host: 127.0.0.1:14321
+Authorization: Bearer <host token>
+Content-Type: application/json
+
+{"unmatched_host_mode":"tunnel"}
+```
+
+These calls select the vault in the body or URL; they do not require
+`X-Vault`. Check each response before continuing: vault creation returns
+`201`, and credential, service and settings writes return `200`.
+
+### Bootstrap token recovery
 
 For a missing or invalid bootstrap file, stop the service, then run:
 
@@ -179,10 +237,11 @@ Provider canaries (model API, Tavily, NextCloud, domagent, Linear MCP and
 external blind hosts) belong to the NanoClaw workstream and have not been
 verified by these local synthetic checks.
 
-Against `872578e`, the existing-file surface is 13 files, 177 insertions and
-6 deletions: **183 changed lines**, below the 300-line limit. No Go module or
-checksum changes were needed. The refreshed `upstream/main` also resolved to
-`872578e` at validation time.
+At the end of the original spike (`d141569`), the existing-file surface
+against `872578e` was 13 files, 177 insertions and 6 deletions: **183 changed
+lines**, below the 300-line limit. No Go module or checksum changes were
+needed. The refreshed `upstream/main` also resolved to `872578e` at validation
+time.
 
 ```bash
 git diff --stat 872578e -- $(git ls-tree -r --name-only 872578e)
