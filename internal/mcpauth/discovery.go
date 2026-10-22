@@ -98,8 +98,11 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 		}
 	}
 	origin := resource.Scheme + "://" + resource.Host
-	path := strings.TrimSuffix(resource.EscapedPath(), "/")
+	path := resource.EscapedPath()
 	metadataURLs = append(metadataURLs, origin+"/.well-known/oauth-protected-resource"+path)
+	if strings.HasSuffix(path, "/") {
+		metadataURLs = append(metadataURLs, origin+"/.well-known/oauth-protected-resource"+strings.TrimSuffix(path, "/"))
+	}
 	if path != "" {
 		metadataURLs = append(metadataURLs, origin+"/.well-known/oauth-protected-resource")
 	}
@@ -115,6 +118,9 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 		}
 		var lookupErr error
 		protected, lookupErr = oauthex.GetProtectedResourceMetadata(ctx, metadataURL, expected, m.client)
+		if lookupErr != nil && strings.HasSuffix(expected, "/") {
+			protected, lookupErr = oauthex.GetProtectedResourceMetadata(ctx, metadataURL, strings.TrimSuffix(expected, "/"), m.client)
+		}
 		if lookupErr == nil {
 			break
 		}
