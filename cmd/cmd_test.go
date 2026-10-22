@@ -347,6 +347,7 @@ func TestEnsureServerStopped_BlocksWithDATABASE_URL(t *testing.T) {
 }
 
 func TestEnsureServerStopped_AllowsForceWithDATABASE_URL(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/testdb")
 	err := ensureServerStopped(true)
 	if err != nil {
