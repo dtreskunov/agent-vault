@@ -72,6 +72,8 @@ NanoClaw can host OAuth callbacks while the gateway stays private; configure
 PKCE/resource-bound tokens, refresh and automatic socket-proxy injection.
 [OAuth apps](docs/guides/oauth-apps.mdx) support install-wide configuration,
 vault overrides and provider-account sign-in for Google and GitHub.
+[Static key APIs](docs/guides/static-keys.mdx) support atomic key/destination
+updates, safe per-service edits and coalesced usage timestamps.
 
 Agent Vault is both a vault and proxy service and ships as a single binary that acts as both a server and CLI client. It stores credentials and brokers them to your AI agents using a MITM proxy architecture. By design, Agent Vault is meant to be deployed on a separate machine from your AI agents to provide the security guarantee needed so your AI agents cannot directly access the credentials within Agent Vault.
 

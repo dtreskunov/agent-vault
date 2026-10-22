@@ -26,6 +26,13 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+For static keys, the host can use
+`PUT /v1/vaults/{vault}/keys/{KEY} {value?,service}` to update a key and
+its single destination atomically, or DELETE that same URL. Per-service
+PUT/DELETE uses `/v1/vaults/{vault}/services/{name}`; generated `mcp-*`
+and `oauth-*` services are protected. Credential lists include `updated_at`
+and nullable, coalesced `last_used_at`.
+
 OAuth apps use `GET|PUT|DELETE /v1/oauth-apps/{provider}` (owner) or
 `/v1/vaults/{vault}/oauth-apps/{provider}` (vault admin for writes).
 PUT body is `{client_id,client_secret?}`; the secret is required for a new ID

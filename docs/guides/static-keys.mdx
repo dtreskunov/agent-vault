@@ -1,0 +1,60 @@
+---
+title: "Static keys and service edits"
+description: "Atomic static keys, safe per-service edits and credential timestamps."
+---
+
+All mutations use a host bearer token with vault admin access. Credential
+values are write-only when `reveal_disabled` is enabled.
+
+## Preferred atomic API
+
+`PUT /v1/vaults/{vault}/keys/{KEY}` accepts:
+
+```json
+{
+  "value": "<operator-supplied value>",
+  "service": {
+    "name": "example-key",
+    "host": "api.example.com/v1/*",
+    "auth": {"type": "bearer", "token": "EXAMPLE_KEY"}
+  }
+}
+```
+
+The path key in this example is `EXAMPLE_KEY`. `service` uses the existing
+broker service shape (bearer, basic, API-key, custom headers or substitutions).
+It must reference only that key. New keys require a nonempty value; omitting
+`value` on an existing key preserves it while changing the destination.
+The credential and its single service are replaced in one transaction.
+Old services using only that key are removed, so renaming a service does not
+leave an old destination active. Sharing a service across multiple keys
+returns `409`, as does colliding with another service's name.
+
+Success returns `200 {key}`. `DELETE /v1/vaults/{vault}/keys/{KEY}` atomically
+removes the static credential and its services (`204`; missing key `404`).
+OAuth accounts must be edited through their own lifecycle APIs.
+
+## Per-service edits
+
+`PUT /v1/vaults/{vault}/services/{name}` accepts a single service object;
+`name` can be omitted from the body or must match the URL. It upserts that
+name under the vault mutation lock, preserving every other service.
+`DELETE /v1/vaults/{vault}/services/{name}` uses the existing delete endpoint
+and returns `200` metadata.
+
+Names beginning `mcp-` or `oauth-` are reserved. Direct PUT/POST/PATCH/DELETE,
+bulk replacement and clearing cannot change/remove generated account
+services (`409`). A bulk PUT must retain generated services unchanged.
+Non-managed services cannot reference managed account credentials.
+
+The legacy `POST /v1/credentials` and bulk service APIs remain available,
+but separate credential/service requests are not an atomic transaction.
+Prefer the atomic key API when a key has one destination.
+
+## Timestamps
+
+`GET /v1/credentials?vault=...` includes `updated_at` and nullable
+`last_used_at` on credential metadata entries. Static usage is recorded when
+resolved for proxy injection, with persisted writes coalesced to once per
+minute per credential. Usage survives restart and is removed with the key.
+It represents an outbound attempt, not proof of upstream success.

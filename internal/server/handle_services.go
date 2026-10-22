@@ -422,6 +422,7 @@ func (s *Server) handleServicesUpsert(w http.ResponseWriter, r *http.Request) {
 		upserted = append(upserted, svc.Name)
 	}
 
+	if !s.allowServiceMutation(w,ctx,ns.ID,existing){return}
 	servicesJSON, err := json.Marshal(existing)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to marshal services")
@@ -497,6 +498,7 @@ func (s *Server) handleServiceRemove(w http.ResponseWriter, r *http.Request) {
 	filtered = append(filtered, services[:idx]...)
 	filtered = append(filtered, services[idx+1:]...)
 
+	if !s.allowServiceMutation(w,ctx,ns.ID,filtered){return}
 	servicesJSON, err := json.Marshal(filtered)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to marshal services")
@@ -584,6 +586,7 @@ func (s *Server) handleServicePatch(w http.ResponseWriter, r *http.Request) {
 
 	services[idx].Enabled = req.Enabled
 
+	if !s.allowServiceMutation(w,ctx,ns.ID,services){return}
 	servicesJSON, err := json.Marshal(services)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to marshal services")
@@ -656,6 +659,7 @@ func (s *Server) handleServicesSet(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 
+	if !s.allowServiceMutation(w,ctx,ns.ID,services){return}
 	if _, err := s.store.SetBrokerConfig(ctx, ns.ID, string(servicesJSON)); err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to set services")
 		return
@@ -686,6 +690,7 @@ func (s *Server) handleServicesClear(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 
+	if !s.allowServiceMutation(w,ctx,ns.ID,nil){return}
 	if _, err := s.store.SetBrokerConfig(ctx, ns.ID, "[]"); err != nil {
 		jsonError(w, http.StatusInternalServerError, "Failed to clear services")
 		return

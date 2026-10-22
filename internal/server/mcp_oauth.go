@@ -11,6 +11,7 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/mcpauth"
 	"github.com/Infisical/agent-vault/internal/oauthrelay"
+	"github.com/Infisical/agent-vault/internal/statickeys"
 	"github.com/Infisical/agent-vault/internal/store"
 )
 
@@ -29,6 +30,7 @@ func (s *Server) registerMCPOAuth(mux *http.ServeMux, authed func(http.HandlerFu
 		return s.requireInitialized(s.requireAuth(authed(limitBody(handler))))
 	}
 	s.registerOAuthApps(mux, wrap)
+	s.registerKeyRoutes(mux, wrap)
 	mux.HandleFunc("POST /v1/vaults/{name}/mcp-oauth/start", wrap(s.handleMCPOAuthStart))
 	mux.HandleFunc("POST /v1/vaults/{name}/mcp-oauth/probe", wrap(s.handleMCPOAuthProbe))
 	mux.HandleFunc("GET /v1/vaults/{name}/mcp-oauth", wrap(s.handleMCPOAuthList))
@@ -187,10 +189,16 @@ func (s *Server) mcpBrowserCallback(w http.ResponseWriter, r *http.Request, stat
 type gatewayCredentialStore struct {
 	credentialStoreAdapter
 	manager *mcpauth.Manager
+	usage   *statickeys.Repository
 }
 
 func (a gatewayCredentialStore) GetCredential(ctx context.Context, vault, key string) (*store.Credential, error) {
 	credential, err := a.Store.GetCredential(ctx, vault, key)
+	if err == nil && credential != nil && credential.Type == "static" && a.usage != nil {
+		if err := a.usage.Touch(ctx, credential); err != nil {
+			return nil, err
+		}
+	}
 	if err != nil || credential == nil || (credential.Type != "mcp_oauth" && credential.Type != "oauth_app") {
 		return credential, err
 	}

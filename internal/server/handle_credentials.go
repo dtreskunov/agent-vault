@@ -90,6 +90,8 @@ func (s *Server) handleCredentialsSet(w http.ResponseWriter, r *http.Request) {
 }
 
 type credentialEntry struct {
+	UpdatedAt time.Time `json:"updated_at"`
+	LastUsedAt *time.Time `json:"last_used_at"`
 	Key              string  `json:"key"`
 	Type             string  `json:"type,omitempty"`
 	Value            string  `json:"value,omitempty"`
@@ -166,7 +168,7 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, fmt.Sprintf("Credential %q not found", keyFilter))
 			return
 		}
-		entry := credentialEntry{Key: cred.Key, Type: cred.Type}
+		entry := credentialEntry{Key: cred.Key, Type: cred.Type,UpdatedAt:cred.UpdatedAt}
 		if cred.Type == "oauth" && len(cred.Ciphertext) == 0 {
 			entry.Value = ""
 		} else {
@@ -198,7 +200,7 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 	isMember := s.isMemberOrAbove(r, ns.ID)
 	for i, cred := range creds {
 		keys[i] = cred.Key
-		entries[i] = credentialEntry{Key: cred.Key, Type: cred.Type}
+		entries[i] = credentialEntry{Key: cred.Key, Type: cred.Type,UpdatedAt:cred.UpdatedAt}
 
 		if reveal {
 			if cred.Type == "oauth" && len(cred.Ciphertext) == 0 {
@@ -234,6 +236,7 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := credentialsListResponse{Keys: keys}
+	if err:=s.credentialMetadata(ctx,ns.ID,entries);err!=nil{jsonError(w,500,"Failed to read credential usage");return}
 	if isMember || reveal {
 		resp.Credentials = entries
 	}
