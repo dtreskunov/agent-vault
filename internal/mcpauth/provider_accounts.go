@@ -135,6 +135,9 @@ func grantedScopeSets(a *Account, scope string) error {
 	if err != nil {
 		return err
 	}
+	if a.Provider == "github" {
+		scope = strings.ReplaceAll(scope, ",", " ")
+	}
 	granted := strings.Fields(scope)
 	kept := make([]string, 0, len(a.ScopeSets))
 	for _, set := range p.ScopeSets {

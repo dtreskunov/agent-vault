@@ -1,8 +1,10 @@
 package mcpauth
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +14,23 @@ import (
 )
 
 func (m *Manager) revoke(ctx context.Context, account *Account) {
+	if account.Client.Kind == "app" && account.Issuer == "https://github.com/login/oauth" && account.AccessToken != "" {
+		data, err := json.Marshal(map[string]string{"access_token": account.AccessToken})
+		if err != nil {
+			m.logger.Error("encoding GitHub revocation request", "err", err)
+			return
+		}
+		request, err := http.NewRequestWithContext(ctx, "DELETE", "https://api.github.com/applications/"+url.PathEscape(account.Client.ID)+"/token", bytes.NewReader(data))
+		if err != nil {
+			m.logger.Error("building GitHub revocation request", "err", err)
+			return
+		}
+		request.SetBasicAuth(account.Client.ID, account.Client.Secret)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/vnd.github+json")
+		m.cleanupRequest(request, "GitHub token revocation", account.Key)
+		return
+	}
 	if account.Metadata.RevocationEndpoint == "" {
 		return
 	}
