@@ -68,8 +68,8 @@ app, then the install-wide app, then the public client-metadata URL if the
 server advertises CIMD support. If none applies, the error is
 `registration_unsupported`; a matching catalog issuer includes `provider`
 (`google` or `github`). OAuth-app storage/lookup primitives are present, but
-the install/vault app-management HTTP APIs and GitHub MCP acceptance belong
-to the subsequent P4 work, not this delivery.
+the [install/vault app-management APIs](/guides/oauth-apps) configure these
+apps. Google and GitHub provider accounts use the same completion relay.
 
 Probing does not register a client or begin a sign-in. All discovery,
 registration, exchange, refresh and cleanup traffic uses the network guard.

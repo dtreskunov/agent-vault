@@ -34,6 +34,7 @@ type Core interface {
 }
 
 type Client struct {
+	UpdatedAt       time.Time
 	Issuer          string
 	ID              string
 	Secret          string
@@ -49,6 +50,8 @@ type Client struct {
 }
 
 type Account struct {
+	Provider     string
+	ScopeSets    []string
 	Key          string
 	ResourceURL  string
 	Resource     string
@@ -74,6 +77,9 @@ type Flow struct {
 }
 
 type AccountInfo struct {
+	Kind        string     `json:"kind"`
+	Provider    string     `json:"provider,omitempty"`
+	ScopeSets   []string   `json:"scope_sets,omitempty"`
 	Key         string     `json:"key"`
 	ResourceURL string     `json:"resource_url"`
 	Account     *string    `json:"account"`
@@ -90,7 +96,12 @@ func (a Account) Info() AccountInfo {
 	if a.Reconnect || a.AccessToken == "" {
 		status = "needs_reconnect"
 	}
+	id := a.Provider
+	if id == "" {
+		id = provider(a.Issuer)
+	}
 	return AccountInfo{Key: a.Key, ResourceURL: a.ResourceURL, ConnectedAt: a.ConnectedAt,
+		Kind: accountType(a), Provider: id, ScopeSets: a.ScopeSets,
 		LastUsedAt: a.LastUsedAt, UpdatedAt: a.UpdatedAt, Status: status, Client: a.Client.Kind,
 		Scopes: strings.Fields(a.Scopes)}
 }

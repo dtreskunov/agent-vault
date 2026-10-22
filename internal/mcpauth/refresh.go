@@ -10,6 +10,11 @@ import (
 )
 
 func (m *Manager) Credential(ctx context.Context, vault, key string) (*store.Credential, error) {
+	appUnlock, err := m.LockApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer appUnlock()
 	unlock, err := m.core.LockVault(ctx, vault)
 	if err != nil {
 		return nil, err

@@ -28,6 +28,7 @@ func (s *Server) registerMCPOAuth(mux *http.ServeMux, authed func(http.HandlerFu
 	wrap := func(handler http.HandlerFunc) http.HandlerFunc {
 		return s.requireInitialized(s.requireAuth(authed(limitBody(handler))))
 	}
+	s.registerOAuthApps(mux, wrap)
 	mux.HandleFunc("POST /v1/vaults/{name}/mcp-oauth/start", wrap(s.handleMCPOAuthStart))
 	mux.HandleFunc("POST /v1/vaults/{name}/mcp-oauth/probe", wrap(s.handleMCPOAuthProbe))
 	mux.HandleFunc("GET /v1/vaults/{name}/mcp-oauth", wrap(s.handleMCPOAuthList))
@@ -108,7 +109,13 @@ func (s *Server) handleMCPOAuthList(w http.ResponseWriter, r *http.Request) {
 	if s.mcpError(w, err) {
 		return
 	}
-	jsonOK(w, items)
+	filtered := make([]mcpauth.AccountInfo, 0)
+	for _, item := range items {
+		if item.Kind == "mcp_oauth" {
+			filtered = append(filtered, item)
+		}
+	}
+	jsonOK(w, filtered)
 }
 
 func (s *Server) handleMCPOAuthDelete(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +191,7 @@ type gatewayCredentialStore struct {
 
 func (a gatewayCredentialStore) GetCredential(ctx context.Context, vault, key string) (*store.Credential, error) {
 	credential, err := a.Store.GetCredential(ctx, vault, key)
-	if err != nil || credential == nil || credential.Type != "mcp_oauth" {
+	if err != nil || credential == nil || (credential.Type != "mcp_oauth" && credential.Type != "oauth_app") {
 		return credential, err
 	}
 	if a.manager == nil {
@@ -204,6 +211,11 @@ func (s *Server) deleteGatewayVault(ctx context.Context, vault, name string) err
 	if s.mcpOAuth == nil {
 		return s.store.DeleteVault(ctx, name)
 	}
+	appUnlock, err := s.mcpOAuth.LockApps(ctx)
+	if err != nil {
+		return err
+	}
+	defer appUnlock()
 	unlock, err := s.store.LockVault(ctx, vault)
 	if err != nil {
 		return err
@@ -216,7 +228,7 @@ func (s *Server) deleteGatewayVault(ctx context.Context, vault, name string) err
 }
 
 func (s *Server) assertNotMCPManaged(w http.ResponseWriter, ctx context.Context, vault, key string) bool {
-	if !strings.HasPrefix(key, "MCP_") {
+	if !strings.HasPrefix(key, "MCP_") && !strings.HasPrefix(key, "OAUTH_") {
 		return true
 	}
 	credential, err := s.store.GetCredential(ctx, vault, key)
@@ -224,7 +236,7 @@ func (s *Server) assertNotMCPManaged(w http.ResponseWriter, ctx context.Context,
 		jsonError(w, http.StatusInternalServerError, "Failed to check managed credential")
 		return false
 	}
-	if credential != nil && credential.Type == "mcp_oauth" {
+	if credential != nil && (credential.Type == "mcp_oauth" || credential.Type == "oauth_app") {
 		jsonCodedError(w, http.StatusConflict, "mcp_managed_credential", "Manage this credential through the MCP OAuth account endpoint")
 		return false
 	}

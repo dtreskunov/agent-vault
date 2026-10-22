@@ -3,13 +3,11 @@ package mcpauth
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
 	"time"
 
-	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/mcpauth/oauthex"
 )
 
@@ -113,59 +111,36 @@ func (m *Manager) app(ctx context.Context, vault, issuer string) (*Client, error
 	if id == "" {
 		return nil, sql.ErrNoRows
 	}
-	var client Client
-	if err := m.repo.get(ctx, vault, "app", id, &client); err == nil {
+	client, err := m.storedApp(ctx, vault, id)
+	if err == nil {
 		if client.Issuer != issuer {
 			return nil, failure("invalid_app", "Configured OAuth app issuer does not match discovery")
 		}
 		client.Kind, client.Source = "app", "vault"
-		return &client, nil
+		return client, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	raw, err := m.core.GetSetting(ctx, "gateway.oauth_app."+id)
+	client, err = m.storedApp(ctx, "", id)
 	if err != nil {
-		return nil, err
-	}
-	var sealed struct{ Ciphertext, Nonce []byte }
-	if err := json.Unmarshal([]byte(raw), &sealed); err != nil {
-		return nil, err
-	}
-	if err := m.repo.decode(sealed.Ciphertext, sealed.Nonce, &client); err != nil {
 		return nil, err
 	}
 	if client.Issuer != issuer {
 		return nil, failure("invalid_app", "Install OAuth app issuer does not match discovery")
 	}
 	client.Kind, client.Source = "app", "install"
-	return &client, nil
+	return client, nil
 }
 
-// StoreApp supplies the persistence primitive for the subsequent OAuth-app API.
+// StoreApp retains the initial setup helper for programmatic callers.
 // An empty vault selects the instance app; this is not exposed to socket sessions.
 func (m *Manager) StoreApp(ctx context.Context, vault string, client Client) error {
 	id := provider(client.Issuer)
 	if id == "" || client.ID == "" || client.Secret == "" {
 		return failure("invalid_app", "A catalog provider, client ID and secret are required")
 	}
-	client.AuthMethod = "client_secret_post"
-	if vault != "" {
-		return m.repo.put(ctx, m.repo.db, vault, "app", id, &client, 0)
-	}
-	payload, err := json.Marshal(client)
-	if err != nil {
-		return err
-	}
-	defer crypto.WipeBytes(payload)
-	ct, nonce, err := crypto.Encrypt(payload, m.repo.key)
-	if err != nil {
-		return err
-	}
-	sealed, err := json.Marshal(struct{ Ciphertext, Nonce []byte }{ct, nonce})
-	if err != nil {
-		return err
-	}
-	return m.core.SetSetting(ctx, "gateway.oauth_app."+id, string(sealed))
+	_, err := m.PutApp(ctx, vault, id, AppInput{ClientID: client.ID, ClientSecret: &client.Secret})
+	return err
 }
 
 func (m *Manager) chooseClient(ctx context.Context, vault string, discovery *Discovery, register bool, name string) (*Client, error) {

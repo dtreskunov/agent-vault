@@ -149,9 +149,9 @@ func (r *Repository) saveAccount(ctx context.Context, vault string, a *Account, 
 	}
 	now := r.dialect.FormatTime(a.UpdatedAt)
 	result, err := tx.ExecContext(ctx, r.dialect.Rebind(`INSERT INTO credentials
-		(id,vault_id,key,type,ciphertext,nonce,created_at,updated_at) VALUES (?,?,?,'mcp_oauth',?,?,?,?)
+		(id,vault_id,key,type,ciphertext,nonce,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(vault_id,key) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,
-		type=excluded.type,updated_at=excluded.updated_at WHERE credentials.type='mcp_oauth'`), rand.Text(), vault, a.Key, ct, nonce, now, now)
+		type=excluded.type,updated_at=excluded.updated_at WHERE credentials.type=excluded.type`), rand.Text(), vault, a.Key, accountType(*a), ct, nonce, now, now)
 	if err != nil {
 		return err
 	}
@@ -182,10 +182,14 @@ func (r *Repository) updateServices(ctx context.Context, tx *sql.Tx, vault strin
 			return err
 		}
 	}
-	name := "mcp-" + strings.ToLower(strings.TrimPrefix(account.Key, "MCP_"))
+	name := servicePrefix(*account)
 	kept := services[:0]
 	for _, service := range services {
-		if service.Name != name && service.Name != name+"-children" {
+		owned := service.Name == name || service.Name == name+"-children"
+		if account.Provider != "" {
+			owned = strings.HasPrefix(service.Name, name)
+		}
+		if !owned {
 			service.Host, service.Path, service.Port = broker.SplitInlineHost(service.Host, service.Path)
 			kept = append(kept, service)
 		}
@@ -230,7 +234,7 @@ func (r *Repository) removeAccount(ctx context.Context, vault string, a *Account
 		return err
 	}
 	for _, query := range []string{
-		`DELETE FROM credentials WHERE vault_id=? AND key=? AND type='mcp_oauth'`,
+		`DELETE FROM credentials WHERE vault_id=? AND key=? AND type IN ('mcp_oauth','oauth_app')`,
 		`DELETE FROM gateway_oauth_records WHERE vault_id=? AND kind='account' AND record_key=?`,
 		`DELETE FROM gateway_oauth_records WHERE vault_id=? AND kind='state' AND account_key=?`,
 	} {

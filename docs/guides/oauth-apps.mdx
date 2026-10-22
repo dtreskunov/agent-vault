@@ -1,0 +1,81 @@
+---
+title: "OAuth apps and provider accounts"
+description: "Install-wide app credentials, vault overrides and provider sign-in."
+---
+
+All calls use the host agent bearer token. Configure the public callback with
+`AGENT_VAULT_OAUTH_REDIRECT_URL` and keep `AGENT_VAULT_REVEAL_DISABLED=true`.
+The gateway never returns client secrets or account tokens.
+
+## Catalog and app configuration
+
+`GET /v1/oauth/providers` returns Google and GitHub with their issuers,
+authorization/token endpoints, console URLs, scope sets and known MCP servers.
+Google scope sets are `gmail-read`, `gmail-send`, `calendar`, `drive-read`;
+GitHub scope sets are `repo` and `issues`.
+
+| Scope | Routes | Permission |
+| --- | --- | --- |
+| Install | `GET`, `PUT`, `DELETE /v1/oauth-apps/{provider}` | Instance owner |
+| Vault | `GET`, `PUT`, `DELETE /v1/vaults/{vault}/oauth-apps/{provider}` | Member for GET, admin for mutation |
+
+PUT accepts `{client_id, client_secret?}`. The secret is required on first
+setup and when changing client ID. Omitting it on an unchanged ID preserves
+the current secret; explicitly empty secrets are rejected. GET/PUT return
+`{client_id,updated_at,accounts}`, plus `accounts_all_vaults` for install
+apps. Counts include MCP and provider accounts issued to that exact app
+source. An unconfigured app returns `404`; DELETE returns `204`.
+
+Apps are encrypted at rest. Install apps live in instance settings, not a
+proxy-bindable vault. A vault app overrides the install app. Account tokens
+remain vault-local even when two vaults use one install client ID.
+
+Changing a client ID or deleting an app revokes/removes accounts and pending
+sign-ins issued to that app source. Changing a vault override does not affect
+other vaults or accounts issued to the install app. Deleting an install app
+affects its issued accounts, not accounts issued to vault overrides.
+Secret-only rotation preserves accounts and updates their pinned secret.
+Refresh always uses the client that issued the account, not whichever app
+would be selected for a new sign-in.
+
+## Provider accounts
+
+| Action | Route |
+| --- | --- |
+| Start | `POST /v1/vaults/{vault}/oauth-accounts/start {provider,scope_sets,replace_key?}` |
+| Complete | `POST /v1/oauth/complete {state,code,iss?}` |
+| List | `GET /v1/vaults/{vault}/oauth-accounts` |
+| Disconnect | `DELETE /v1/vaults/{vault}/oauth-accounts/{key}` |
+
+Start and DELETE require vault admin; listing requires member. Start returns
+`{state,authorize_url}`. Open that URL in the browser and relay the callback
+as described in [MCP OAuth](/guides/mcp-oauth). Google requests offline access
+and consent. Replacement reconnects an existing account of the same provider.
+
+The list uses the MCP account metadata shape with `kind:"oauth_app"`,
+`provider`, `scope_sets`, `scopes`, `connected_at`, `updated_at`,
+`last_used_at`, `status` and `client:"app"`. The `account` identity is null
+until verified provider identity retrieval is implemented; no unverified ID
+token is interpreted.
+
+Successful completion atomically stores the account, encrypted token and
+generated `oauth-*` bearer services for the granted scope sets. Granting no
+requested scope set fails; ungranted sets do not generate services. These
+services preserve unrelated MCP and static services. Scope sets control
+provider grants and destination hosts/paths, not HTTP method-level filtering.
+Normal proxy requests refresh as needed and inject real tokens; the host
+does not retrieve them.
+
+## GitHub MCP
+
+The [MCP API](/guides/mcp-oauth) accepts
+`https://api.githubcopilot.com/mcp/`, including GitHub's slash/no-slash
+well-known metadata variants. With no configured GitHub app, probe returns
+`{oauth:true,code:"registration_unsupported",provider:"github",...}`. With
+a vault or install app it returns `client:"app"`.
+
+Use the GitHub OAuth app's callback configured above. Two vaults sign in
+independently; their tokens remain separate. These provider-consent acceptance
+tests need operator-supplied app credentials and browser consent and must be
+run on isolated state or coordinated by the NanoClaw deployment agent.
+Do not replace or restart the live canary from the fork checkout.

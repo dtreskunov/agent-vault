@@ -66,6 +66,11 @@ func (m *Manager) cleanupRequest(request *http.Request, operation, key string) {
 }
 
 func (m *Manager) Disconnect(ctx context.Context, vault, key string) error {
+	appUnlock, err := m.LockApps(ctx)
+	if err != nil {
+		return err
+	}
+	defer appUnlock()
 	unlock, err := m.core.LockVault(ctx, vault)
 	if err != nil {
 		return err

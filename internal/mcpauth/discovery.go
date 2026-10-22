@@ -167,6 +167,9 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 }
 
 func (a Account) services() ([]broker.Service, error) {
+	if a.Provider != "" {
+		return a.providerServices()
+	}
 	u, err := url.Parse(a.ResourceURL)
 	if err != nil {
 		return nil, err

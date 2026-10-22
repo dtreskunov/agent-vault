@@ -2,13 +2,11 @@ package mcpauth
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -49,6 +47,11 @@ func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName st
 	if !discovery.OAuth {
 		return nil, failure("oauth_not_required", "MCP resource did not request OAuth authentication")
 	}
+	appUnlock, err := m.LockApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer appUnlock()
 	unlock, err := m.core.LockVault(ctx, vault)
 	if err != nil {
 		return nil, err
@@ -73,33 +76,19 @@ func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName st
 		return nil, err
 	}
 	account.Client = *client
-	verifier, err := oauth.GenerateCodeVerifier()
-	if err != nil {
-		return nil, err
-	}
-	state := "mcp_oast_" + rand.Text()
-	flow := Flow{VaultID: vault, Account: account, Verifier: verifier, RedirectURI: m.config.RedirectURI,
-		ExpiresAt: m.now().Add(10 * time.Minute)}
 	if _, err := m.repo.db.ExecContext(ctx, `DELETE FROM gateway_oauth_records WHERE kind='state' AND expires_at>0 AND expires_at<`+
 		m.repo.dialect.Rebind("?"), m.now().Unix()); err != nil {
 		return nil, err
 	}
-	if err := m.repo.put(ctx, m.repo.db, vault, "state", digest(state), &flow, flow.ExpiresAt.Unix()); err != nil {
-		return nil, err
-	}
-	authorization := oauth.BuildAuthorizationURL(discovery.Server.AuthorizationEndpoint, client.ID,
-		flow.RedirectURI, state, oauth.CodeChallengeS256(verifier), account.Scopes, " ", false)
-	u, err := url.Parse(authorization)
-	if err != nil {
-		return nil, err
-	}
-	query := u.Query()
-	query.Set("resource", account.Resource)
-	u.RawQuery = query.Encode()
-	return &Started{State: state, AuthorizeURL: u.String()}, nil
+	return m.startFlow(ctx, vault, account)
 }
 
 func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authorize func(string) error) (*oauthrelay.Result, error) {
+	appUnlock, err := m.LockApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer appUnlock()
 	flow, err := m.repo.Flow(ctx, input.State)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, failure("invalid_state", "Invalid or expired MCP OAuth state")
@@ -141,6 +130,9 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, failure("invalid_state", "An OAuth authorization code is required")
 	}
 	a := &flow.Account
+	if err := m.validateFlowClient(ctx, flow.VaultID, a); err != nil {
+		return nil, err
+	}
 	token, err := oauth.Exchange(ctx, oauth.ExchangeConfig{
 		Client: m.client, TokenURL: a.Metadata.TokenEndpoint, ClientID: a.Client.ID, ClientSecret: a.Client.Secret,
 		TokenAuthMethod: a.Client.AuthMethod, Code: input.Code, CodeVerifier: flow.Verifier,
@@ -161,6 +153,10 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, failure("invalid_token_response", "MCP OAuth token endpoint returned an unusable token")
 	}
 	a.AccessToken, a.RefreshToken, a.ExpiresAt = token.AccessToken, token.RefreshToken, token.ExpiresAt
+	if err := grantedScopeSets(a, token.Scope); err != nil {
+		m.revoke(ctx, a)
+		return nil, err
+	}
 	now := m.now().UTC()
 	a.ConnectedAt, a.UpdatedAt, a.Reconnect = &now, now, false
 	if err := m.repo.saveAccount(ctx, flow.VaultID, a, true); err != nil {

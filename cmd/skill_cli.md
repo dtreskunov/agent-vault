@@ -26,6 +26,15 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+OAuth apps use `GET|PUT|DELETE /v1/oauth-apps/{provider}` (owner) or
+`/v1/vaults/{vault}/oauth-apps/{provider}` (vault admin for writes).
+PUT body is `{client_id,client_secret?}`; the secret is required for a new ID
+and never returned. `GET /v1/oauth/providers` supplies the provider/scope-set
+catalog. Provider-account sign-in starts at
+`POST /v1/vaults/{vault}/oauth-accounts/start {provider,scope_sets,replace_key?}`.
+List/disconnect use `/v1/vaults/{vault}/oauth-accounts[/{key}]`.
+Changing/deleting an app disconnects accounts issued to that app source.
+
 NanoClaw hosts can complete public OAuth redirects with
 `POST /v1/oauth/complete {state,code,iss?}` using their agent bearer token.
 Completion returns `{status,vault,key?,account?,code?,error?}`, never token
