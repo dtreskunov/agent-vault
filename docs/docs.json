@@ -55,6 +55,7 @@
               "guides/nanoclaw-gateway",
               "guides/mcp-oauth",
               "guides/oauth-apps",
+              "guides/oauth-token-stubs",
               "guides/static-keys",
               "guides/slack-agent-template",
               "guides/deploy-agent-container",

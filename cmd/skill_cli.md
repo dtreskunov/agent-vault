@@ -26,6 +26,12 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+For stdio MCP OAuth clients, configure `av-refresh:<provider account key>`
+as the refresh token and `av-access:<key>` as the access token. The gateway
+answers catalog token-endpoint refreshes with synthetic tokens only when the
+account belongs to the proxy's vault. The synthetic response never contacts
+the provider; real refresh/injection happens on the subsequent API request.
+
 For static keys, the host can use
 `PUT /v1/vaults/{vault}/keys/{KEY} {value?,service}` to update a key and
 its single destination atomically, or DELETE that same URL. Per-service

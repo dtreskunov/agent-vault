@@ -237,6 +237,9 @@ func (p *Proxy) forwardRequest(
 		emit(http.StatusRequestEntityTooLarge, "request_too_large")
 		return
 	}
+	local:=r.Clone(r.Context());local.URL=outURL
+	if p.localResponse(w,local,scope.VaultID,emit){return}
+	r.Body=local.Body
 
 	inject, err := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.URL.Path)
 	if inject != nil {

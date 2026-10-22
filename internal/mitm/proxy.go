@@ -71,6 +71,7 @@ type Proxy struct {
 // server so proxy limits and control-plane limits live in one registry;
 // nil disables rate limiting on the MITM path.
 type Options struct {
+	LocalResponse func(context.Context,string,*http.Request)(*http.Response,error)
 	FilterResponse   func(context.Context, string, []string, http.Header) error
 	ConnectPolicy    func(context.Context, string, string, int) (blindtunnel.Mode, error)
 	BoundToken       string // server-owned socket identity; never accepted from the client
