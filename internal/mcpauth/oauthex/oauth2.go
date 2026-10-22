@@ -52,10 +52,17 @@ func getJSON[T any](ctx context.Context, c *http.Client, url string, limit int64
 	if res.StatusCode != http.StatusOK {
 		return nil, &httpStatusError{StatusCode: res.StatusCode}
 	}
-	ct := res.Header.Get("Content-Type")
-	mediaType, _, err := mime.ParseMediaType(ct)
-	if err != nil || mediaType != "application/json" {
-		return nil, fmt.Errorf("bad content type %q", ct)
+	types := res.Header.Values("Content-Type")
+	if len(types) == 0 {
+		return nil, fmt.Errorf("missing JSON content type")
+	}
+	for _, field := range types {
+		for _, ct := range strings.Split(field, ",") {
+			mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(ct))
+			if err != nil || mediaType != "application/json" {
+				return nil, fmt.Errorf("bad content type %q", field)
+			}
+		}
 	}
 
 	var t T

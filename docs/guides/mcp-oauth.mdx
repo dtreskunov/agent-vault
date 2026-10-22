@@ -148,8 +148,9 @@ binding, PKCE, OIDC/CIMD and configured-app fallback, rotation, one-time
 re-registration, issuer/replay/expiry checks, transaction rollback,
 Unix-socket injection, challenge filtering and disconnect/vault cleanup.
 
-Live Linear discovery and two distinct vault-scoped registrations were
-verified against `https://mcp.linear.app/mcp` from an isolated gateway.
-Browser consent, real token exchange/refresh and a container socket call
-using a real Linear account are explicitly deferred to NanoClaw deployment;
-these are not claimed as completed acceptance.
+The NanoClaw deployment agent reported live P2 acceptance on 2026-10-22
+using `4065e67`: two groups registered distinct Linear clients, real
+`list_teams` calls worked through both sockets, disconnecting one left the
+other working, and the disconnected group received a 401 without
+`resource_metadata`. That accepted client-name commit is now folded into
+`bananaclaw`; this does not imply that later P4 changes are deployed.

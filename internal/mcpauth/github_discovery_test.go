@@ -13,7 +13,7 @@ type githubMetadataTransport struct{}
 func (githubMetadataTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	body := ""
 	status := 200
-	headers := http.Header{"Content-Type": {"application/json"}}
+	headers := http.Header{"Content-Type": {"application/json,application/json"}}
 	switch request.URL.String() {
 	case "https://api.githubcopilot.com/mcp/":
 		status = 401

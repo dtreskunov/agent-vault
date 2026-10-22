@@ -74,6 +74,14 @@ well-known metadata variants. With no configured GitHub app, probe returns
 `{oauth:true,code:"registration_unsupported",provider:"github",...}`. With
 a vault or install app it returns `client:"app"`.
 
+GitHub's live metadata also repeats `application/json` in its Content-Type.
+The vendored decoder accepts repeated JSON media types but still rejects
+mixed or invalid types. A public, credential-free regression check is opt-in:
+
+```bash
+go test -mod=readonly ./internal/mcpauth -run TestLiveGitHubProbe -live-oauth -v
+```
+
 Use the GitHub OAuth app's callback configured above. Two vaults sign in
 independently; their tokens remain separate. These provider-consent acceptance
 tests need operator-supplied app credentials and browser consent and must be

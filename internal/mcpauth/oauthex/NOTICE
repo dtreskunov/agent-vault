@@ -12,5 +12,7 @@ Local modifications:
 - Dynamic-registration responses retain the RFC 7592 management URI and token.
 - Literal private IPs are not pre-rejected by URL validation: the supplied
   Agent Vault dialer enforces its instance allowlist on the connected address.
+- Repeated identical application/json Content-Type values are accepted for
+  GitHub metadata compatibility; mixed or invalid media types are rejected.
 
 Agent Vault supplies its guarded HTTP client to discovery and registration.
