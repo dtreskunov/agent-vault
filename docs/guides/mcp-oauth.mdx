@@ -22,7 +22,7 @@ sessions cannot manage accounts.
 | Purpose | Request | Response |
 | --- | --- | --- |
 | Probe | `POST /v1/vaults/{vault}/mcp-oauth/probe {resource_url}` | `200 {oauth,issuer?,client?,code?,provider?}` |
-| Start | `POST /v1/vaults/{vault}/mcp-oauth/start {resource_url}` | `200 {state,authorize_url}` |
+| Start | `POST /v1/vaults/{vault}/mcp-oauth/start {resource_url,client_name?}` | `200 {state,authorize_url}` |
 | Complete | `POST /v1/oauth/complete {state,code,iss?}` | `200 {status,vault,key?,account?,code?,error?}` |
 | List | `GET /v1/vaults/{vault}/mcp-oauth` | `200 [{key,resource_url,account,connected_at,last_used_at,updated_at,status,client,scopes}]` |
 | Disconnect | `DELETE /v1/vaults/{vault}/mcp-oauth/{key}` | `204`; unknown account: `404` |
@@ -54,7 +54,11 @@ authorization server with RFC 8414 and OIDC fallback. Issuers, resource
 identifiers, endpoint schemes and S256 PKCE support are validated.
 
 When RFC 7591 registration is offered, each **(vault, issuer)** gets its own
-client. The registration ID, issued secret, management URI and registration
+client. Its `client_name`, which consent screens show, is the start request's
+`client_name` (NanoClaw sends the agent group's name; 1-100 printable
+characters), or `NanoClaw <vault ID>` when none was ever given. A start with a
+different name registers a new client; the replaced one is deleted with RFC 7592
+once no account or pending sign-in in the vault uses it. The registration ID, issued secret, management URI and registration
 access token are encrypted in that vault. Different vaults never reuse a
 dynamic registration. Confidential client authentication is retained when
 the server requires it.

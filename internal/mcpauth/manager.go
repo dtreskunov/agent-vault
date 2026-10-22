@@ -36,6 +36,12 @@ type Started struct {
 }
 
 func (m *Manager) Start(ctx context.Context, vault, resource string) (*Started, error) {
+	return m.StartNamed(ctx, vault, resource, "")
+}
+
+// StartNamed is Start with the client_name to register under, e.g. the agent
+// group's display name. Empty keeps the existing registration's name.
+func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName string) (*Started, error) {
 	discovery, err := m.discover(ctx, resource)
 	if err != nil {
 		return nil, err
@@ -62,7 +68,7 @@ func (m *Manager) Start(ctx context.Context, vault, resource string) (*Started, 
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	client, err := m.chooseClient(ctx, vault, discovery, true)
+	client, err := m.chooseClient(ctx, vault, discovery, true, clientName)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +189,7 @@ func (m *Manager) reregister(ctx context.Context, vault string, account *Account
 		return err
 	}
 	if current.ID == account.Client.ID || errors.Is(err, sql.ErrNoRows) {
-		if _, err := m.registeredClient(ctx, vault, &Discovery{Server: account.Metadata}, true); err != nil {
+		if _, err := m.registeredClient(ctx, vault, &Discovery{Server: account.Metadata}, true, ""); err != nil {
 			return err
 		}
 	}
@@ -225,7 +231,7 @@ func (m *Manager) Probe(ctx context.Context, vault, resource string) (*ProbeInfo
 		return info, nil
 	}
 	info.Issuer = discovery.Server.Issuer
-	client, err := m.chooseClient(ctx, vault, discovery, false)
+	client, err := m.chooseClient(ctx, vault, discovery, false, "")
 	if err != nil {
 		var unsupported *Failure
 		if errors.As(err, &unsupported) && unsupported.Code == "registration_unsupported" {

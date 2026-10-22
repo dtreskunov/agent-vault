@@ -38,6 +38,7 @@ type authority struct {
 	metadata                                                    bool
 	register                                                    bool
 	secret                                                      bool
+	names                                                       []string
 }
 
 func newAuthority(t *testing.T, manager *Manager) *authority {
@@ -79,6 +80,7 @@ func newAuthority(t *testing.T, manager *Manager) *authority {
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Error(err)
 			}
+			a.names = append(a.names, input.ClientName)
 			expected := "none"
 			if a.secret {
 				expected = "client_secret_basic"
@@ -421,7 +423,7 @@ func TestDiscoveryOIDCFallbackAndMetadataClient(t *testing.T) {
 func TestCatalogAppPreferenceAndUnsupportedProvider(t *testing.T) {
 	m, _, vault := testManager(t)
 	discovery := &Discovery{Server: oauthex.AuthServerMeta{Issuer: "https://github.com/login/oauth", ClientIDMetadataDocumentSupported: false}}
-	if _, err := m.chooseClient(context.Background(), vault, discovery, false); err == nil {
+	if _, err := m.chooseClient(context.Background(), vault, discovery, false, ""); err == nil {
 		t.Fatal("missing app did not fail")
 	} else if unsupported, ok := err.(*Failure); !ok || unsupported.Code != "registration_unsupported" || unsupported.Provider != "github" {
 		t.Fatal("missing catalog provider hint")
@@ -429,19 +431,19 @@ func TestCatalogAppPreferenceAndUnsupportedProvider(t *testing.T) {
 	if err := m.StoreApp(context.Background(), "", Client{Issuer: discovery.Server.Issuer, ID: "install-client", Secret: "synthetic-install-secret"}); err != nil {
 		t.Fatal(err)
 	}
-	client, err := m.chooseClient(context.Background(), vault, discovery, true)
+	client, err := m.chooseClient(context.Background(), vault, discovery, true, "")
 	if err != nil || client.ID != "install-client" || client.Source != "install" {
 		t.Fatal("install app fallback failed")
 	}
 	if err := m.StoreApp(context.Background(), vault, Client{Issuer: discovery.Server.Issuer, ID: "vault-client", Secret: "synthetic-vault-secret"}); err != nil {
 		t.Fatal(err)
 	}
-	client, err = m.chooseClient(context.Background(), vault, discovery, true)
+	client, err = m.chooseClient(context.Background(), vault, discovery, true, "")
 	if err != nil || client.ID != "vault-client" || client.Source != "vault" {
 		t.Fatal("vault app did not override install app")
 	}
 	discovery.Server.Issuer = "https://unknown.example.com"
-	if _, err := m.chooseClient(context.Background(), vault, discovery, false); err == nil {
+	if _, err := m.chooseClient(context.Background(), vault, discovery, false, ""); err == nil {
 		t.Fatal("unknown non-registering issuer accepted")
 	}
 }
@@ -469,5 +471,50 @@ func TestChallengeFilteringAndEncryptedStorage(t *testing.T) {
 	}
 	if err := json.Unmarshal(plaintext, &saved); err != nil || saved.ManagementToken != "synthetic-management-secret" {
 		t.Fatal("registration management token was not retained")
+	}
+}
+
+func TestClientNameRegistrationReuseAndRename(t *testing.T) {
+	m, _, vault := testManager(t)
+	a := newAuthority(t, m)
+	ctx := context.Background()
+	resource := a.server.URL + "/mcp"
+	for _, name := range []string{"My Agent", "My Agent", ""} {
+		if _, err := m.StartNamed(ctx, vault, resource, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.registrations != 1 || a.names[0] != "My Agent" {
+		t.Fatalf("expected one registration named My Agent, got %d %v", a.registrations, a.names)
+	}
+	// A rename registers again; the old client stays while sign-ins are pending.
+	if _, err := m.StartNamed(ctx, vault, resource, "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if a.registrations != 2 || a.names[1] != "Renamed" || a.deletions != 0 {
+		t.Fatalf("rename: registrations=%d names=%v deletions=%d", a.registrations, a.names, a.deletions)
+	}
+	// With nothing using it any more, a replaced client is deleted upstream.
+	if _, err := m.repo.db.Exec(`DELETE FROM gateway_oauth_records WHERE kind='state'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.StartNamed(ctx, vault, resource, "Third"); err != nil {
+		t.Fatal(err)
+	}
+	if a.registrations != 3 || a.deletions != 1 {
+		t.Fatalf("retire: registrations=%d deletions=%d", a.registrations, a.deletions)
+	}
+}
+
+func TestCleanClientName(t *testing.T) {
+	for in, want := range map[string]string{"  My Agent ": "My Agent", "": "", "Ünïcode ✓": "Ünïcode ✓"} {
+		if got, ok := CleanClientName(in); !ok || got != want {
+			t.Fatalf("CleanClientName(%q) = %q, %v", in, got, ok)
+		}
+	}
+	for _, bad := range []string{"line\nbreak", strings.Repeat("x", 101), "\x00"} {
+		if _, ok := CleanClientName(bad); ok {
+			t.Fatalf("CleanClientName(%q) accepted", bad)
+		}
 	}
 }

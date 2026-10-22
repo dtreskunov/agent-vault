@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Infisical/agent-vault/internal/mcpauth/oauthex"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -42,6 +44,8 @@ type Client struct {
 	ManagementToken string
 	RedirectURI     string
 	SecretExpiresAt time.Time
+	// Name is the client_name sent at dynamic registration (e.g. the agent group's name).
+	Name string
 }
 
 type Account struct {
@@ -112,4 +116,19 @@ func provider(issuer string) string {
 func unsupported(issuer string) error {
 	return &Failure{Code: "registration_unsupported", Provider: provider(issuer),
 		Message: fmt.Sprintf("Authorization server %s supports neither usable registration nor a configured app or client metadata", issuer)}
+}
+
+// CleanClientName trims a requested client_name; empty means "keep the
+// current name". It rejects control characters and names over 100 runes.
+func CleanClientName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > 100 || !utf8.ValidString(name) {
+		return "", false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", false
+		}
+	}
+	return name, true
 }

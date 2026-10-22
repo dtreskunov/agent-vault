@@ -7,23 +7,34 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"time"
 
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/mcpauth/oauthex"
 )
 
-func (m *Manager) registeredClient(ctx context.Context, vault string, discovery *Discovery, force bool) (*Client, error) {
-	var client Client
-	if !force {
-		err := m.repo.get(ctx, vault, "client", digest(discovery.Server.Issuer), &client)
-		if err == nil && client.RedirectURI == m.config.RedirectURI &&
-			(client.SecretExpiresAt.IsZero() || client.SecretExpiresAt.After(m.now())) {
-			return &client, nil
-		}
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
+// registeredClient returns the vault's dynamic registration for the issuer,
+// registering one when there is none, it can't be reused, or it was registered
+// under a different name than `name` (empty keeps the stored name).
+func (m *Manager) registeredClient(ctx context.Context, vault string, discovery *Discovery, force bool, name string) (*Client, error) {
+	var stored Client
+	err := m.repo.get(ctx, vault, "client", digest(discovery.Server.Issuer), &stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
+	hasStored := err == nil
+	if !force && hasStored && stored.RedirectURI == m.config.RedirectURI &&
+		(stored.SecretExpiresAt.IsZero() || stored.SecretExpiresAt.After(m.now())) &&
+		(name == "" || stored.Name == name) {
+		return &stored, nil
+	}
+	if name == "" && hasStored {
+		name = stored.Name
+	}
+	if name == "" {
+		name = "NanoClaw " + vault
+	}
+	var client Client
 	authMethod := "none"
 	methods := discovery.Server.TokenEndpointAuthMethodsSupported
 	if len(methods) != 0 && !slices.Contains(methods, "none") {
@@ -38,7 +49,7 @@ func (m *Manager) registeredClient(ctx context.Context, vault string, discovery 
 	}
 	registration, err := oauthex.RegisterClient(ctx, discovery.Server.RegistrationEndpoint,
 		&oauthex.ClientRegistrationMetadata{
-			RedirectURIs: []string{m.config.RedirectURI}, ClientName: "NanoClaw " + vault,
+			RedirectURIs: []string{m.config.RedirectURI}, ClientName: name,
 			TokenEndpointAuthMethod: authMethod, GrantTypes: []string{"authorization_code", "refresh_token"},
 			ResponseTypes: []string{"code"},
 		}, m.client)
@@ -65,12 +76,36 @@ func (m *Manager) registeredClient(ctx context.Context, vault string, discovery 
 		Issuer: discovery.Server.Issuer, ID: registration.ClientID, Secret: registration.ClientSecret,
 		AuthMethod: method, Kind: "registered", RedirectURI: m.config.RedirectURI,
 		ManagementURI: registration.RegistrationClientURI, ManagementToken: registration.RegistrationAccessToken,
-		SecretExpiresAt: registration.ClientSecretExpiresAt,
+		SecretExpiresAt: registration.ClientSecretExpiresAt, Name: name,
 	}
 	if err := m.repo.put(ctx, m.repo.db, vault, "client", digest(client.Issuer), &client, 0); err != nil {
 		return nil, err
 	}
+	if hasStored && !force && stored.ID != client.ID {
+		m.retireClient(ctx, vault, stored)
+	}
 	return &client, nil
+}
+
+// retireClient deletes a replaced registration (RFC 7592, best effort) unless
+// an account or a pending sign-in in the vault still uses its issuer's client.
+func (m *Manager) retireClient(ctx context.Context, vault string, old Client) {
+	accounts, err := m.repo.Accounts(ctx, vault)
+	if err != nil {
+		m.logger.Warn("MCP client retirement skipped", "err", err)
+		return
+	}
+	for _, account := range accounts {
+		if account.Client.ID == old.ID {
+			return
+		}
+	}
+	if pending, err := m.pendingIssuer(ctx, vault, "", old.Issuer); err != nil || pending {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	m.deleteClient(cleanupCtx, old)
 }
 
 func (m *Manager) app(ctx context.Context, vault, issuer string) (*Client, error) {
@@ -133,12 +168,12 @@ func (m *Manager) StoreApp(ctx context.Context, vault string, client Client) err
 	return m.core.SetSetting(ctx, "gateway.oauth_app."+id, string(sealed))
 }
 
-func (m *Manager) chooseClient(ctx context.Context, vault string, discovery *Discovery, register bool) (*Client, error) {
+func (m *Manager) chooseClient(ctx context.Context, vault string, discovery *Discovery, register bool, name string) (*Client, error) {
 	if discovery.Server.RegistrationEndpoint != "" {
 		if !register {
 			return &Client{Kind: "registered"}, nil
 		}
-		return m.registeredClient(ctx, vault, discovery, false)
+		return m.registeredClient(ctx, vault, discovery, false, name)
 	}
 	if client, err := m.app(ctx, vault, discovery.Server.Issuer); err == nil {
 		return client, nil
