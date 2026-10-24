@@ -59,7 +59,11 @@ Configure SMTP to enable Agent Vault to send emails for verification codes, vaul
 
 ## Infisical credential store
 
-Setting `INFISICAL_URL` enables Infisical-backed vaults: Agent Vault polls Infisical and caches the encrypted snapshot locally. Local mutations are rejected. See [Credential stores](/learn/credential-stores).
+Setting `INFISICAL_URL` enables Infisical-backed vaults in ordinary builds:
+Agent Vault polls Infisical and caches the encrypted snapshot locally.
+Canonical gateway releases use `noinfisical`; configuring this integration
+there reports it unavailable rather than loading the excluded SDK.
+Local mutations are rejected. See [Credential stores](/learn/credential-stores).
 
 Supply env vars for one auth method. Detection picks the first complete group in priority order: Universal → Kubernetes → AWS IAM → GCP IAM → GCP ID Token → LDAP.
 

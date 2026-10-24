@@ -1,3 +1,5 @@
+//go:build !noinfisical
+
 package infisical
 
 import (
@@ -15,37 +17,6 @@ import (
 
 	sdk "github.com/infisical/go-sdk"
 )
-
-// SecretsFetcher is the slice of the SDK the syncer actually uses; tests
-// substitute their own implementation without standing up the real client.
-type SecretsFetcher interface {
-	FetchSecrets(ctx context.Context, cfg VaultConfig) ([]Secret, error)
-	AuthMethod() AuthMethod
-}
-
-// DynamicSecretInfo names a dynamic-secret config discovered at a vault's path.
-// Its fields are unknown until a lease is minted.
-type DynamicSecretInfo struct {
-	Name string
-}
-
-// DynamicLease is a minted (or renewed) dynamic-secret lease. Fields carries
-// the SECRET credential values keyed by their provider field name (username,
-// password, …); never log it.
-type DynamicLease struct {
-	LeaseID  string
-	Fields   map[string]string
-	ExpireAt time.Time
-}
-
-// DynamicFetcher is the slice of the SDK the dynamic-secret resolver uses;
-// tests substitute their own implementation. Mirrors SecretsFetcher.
-type DynamicFetcher interface {
-	ListDynamicSecrets(ctx context.Context, cfg VaultConfig) ([]DynamicSecretInfo, error)
-	CreateLease(ctx context.Context, cfg VaultConfig, name string) (DynamicLease, error)
-	RenewLease(ctx context.Context, cfg VaultConfig, leaseID string) (expireAt time.Time, err error)
-	RevokeLease(ctx context.Context, cfg VaultConfig, leaseID string) error
-}
 
 // Client wraps the Infisical SDK and provides a narrow fetch surface.
 type Client struct {
