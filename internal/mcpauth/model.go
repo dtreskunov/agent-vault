@@ -50,6 +50,8 @@ type Client struct {
 }
 
 type Account struct {
+	Identity     *string
+	Subject      string
 	Provider     string
 	ScopeSets    []string
 	Key          string
@@ -69,11 +71,13 @@ type Account struct {
 }
 
 type Flow struct {
-	VaultID     string
-	Account     Account
-	Verifier    string
-	RedirectURI string
-	ExpiresAt   time.Time
+	Nonce           string
+	ExplicitReplace bool
+	VaultID         string
+	Account         Account
+	Verifier        string
+	RedirectURI     string
+	ExpiresAt       time.Time
 }
 
 type AccountInfo struct {
@@ -101,7 +105,8 @@ func (a Account) Info() AccountInfo {
 		id = provider(a.Issuer)
 	}
 	return AccountInfo{Key: a.Key, ResourceURL: a.ResourceURL, ConnectedAt: a.ConnectedAt,
-		Kind: accountType(a), Provider: id, ScopeSets: a.ScopeSets,
+		Account: a.Identity,
+		Kind:    accountType(a), Provider: id, ScopeSets: a.ScopeSets,
 		LastUsedAt: a.LastUsedAt, UpdatedAt: a.UpdatedAt, Status: status, Client: a.Client.Kind,
 		Scopes: strings.Fields(a.Scopes)}
 }

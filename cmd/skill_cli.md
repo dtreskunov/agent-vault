@@ -26,6 +26,12 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
+OAuth completion and account lists return `account` only from an authenticated
+provider identity API or a fully signature-verified OIDC ID token. Identity
+failure leaves it null without failing sign-in. Stable subjects are private.
+Repeated provider sign-in with the same verified subject reuses the account
+key and unions scope sets unless `replace_key` explicitly selects a target.
+
 For stdio MCP OAuth clients, configure `av-refresh:<provider account key>`
 as the refresh token and `av-access:<key>` as the access token. The gateway
 answers catalog token-endpoint refreshes with synthetic tokens only when the

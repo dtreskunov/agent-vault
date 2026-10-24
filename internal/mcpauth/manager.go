@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,6 +60,12 @@ func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName st
 	defer unlock()
 	account := Account{Key: accountKey(resource), ResourceURL: resource, Resource: discovery.Resource.Resource,
 		Issuer: discovery.Server.Issuer, Metadata: discovery.Server, Scopes: strings.Join(discovery.Resource.ScopesSupported, " ")}
+	if slices.Contains(discovery.Server.ScopesSupported, "openid") {
+		account.Scopes = strings.TrimSpace(account.Scopes + " openid")
+		if slices.Contains(discovery.Server.ScopesSupported, "email") {
+			account.Scopes += " email"
+		}
+	}
 	services, err := account.services()
 	if err != nil {
 		return nil, err
@@ -157,6 +164,10 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		m.revoke(ctx, a)
 		return nil, err
 	}
+	m.resolveIdentity(ctx, a, token, flow.Nonce)
+	if err := m.mergeIdentity(ctx, flow.VaultID, a, flow.ExplicitReplace); err != nil {
+		return nil, err
+	}
 	now := m.now().UTC()
 	a.ConnectedAt, a.UpdatedAt, a.Reconnect = &now, now, false
 	if err := m.repo.saveAccount(ctx, flow.VaultID, a, true); err != nil {
@@ -164,6 +175,7 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, err
 	}
 	result.Status = "connected"
+	result.Key, result.Account = a.Key, a.Identity
 	return result, nil
 }
 

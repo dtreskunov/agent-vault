@@ -37,6 +37,9 @@ func (m *Manager) StartProvider(ctx context.Context, vault, provider string, set
 	if err != nil {
 		return nil, err
 	}
+	if provider == "google" {
+		scopes = append(scopes, "openid", "email")
+	}
 	appUnlock, err := m.LockApps(ctx)
 	if err != nil {
 		return nil, err
@@ -73,16 +76,19 @@ func (m *Manager) StartProvider(ctx context.Context, vault, provider string, set
 	if err := broker.Validate(&broker.Config{Vault: vault, Services: services}); err != nil {
 		return nil, err
 	}
-	return m.startFlow(ctx, vault, a)
+	return m.startFlow(ctx, vault, a, replace != "")
 }
 
-func (m *Manager) startFlow(ctx context.Context, vault string, account Account) (*Started, error) {
+func (m *Manager) startFlow(ctx context.Context, vault string, account Account, explicit ...bool) (*Started, error) {
 	verifier, err := oauth.GenerateCodeVerifier()
 	if err != nil {
 		return nil, err
 	}
 	state := "mcp_oast_" + rand.Text()
-	flow := Flow{VaultID: vault, Account: account, Verifier: verifier, RedirectURI: m.config.RedirectURI, ExpiresAt: m.now().Add(10 * time.Minute)}
+	flow := Flow{VaultID: vault, Account: account, Verifier: verifier, Nonce: rand.Text(), RedirectURI: m.config.RedirectURI, ExpiresAt: m.now().Add(10 * time.Minute)}
+	if len(explicit) != 0 {
+		flow.ExplicitReplace = explicit[0]
+	}
 	if err := m.repo.put(ctx, m.repo.db, vault, "state", digest(state), &flow, flow.ExpiresAt.Unix()); err != nil {
 		return nil, err
 	}
@@ -93,10 +99,12 @@ func (m *Manager) startFlow(ctx context.Context, vault string, account Account) 
 		return nil, err
 	}
 	q := u.Query()
+	q.Set("nonce", flow.Nonce)
 	if account.Resource != "" {
 		q.Set("resource", account.Resource)
 	}
 	if account.Provider == "google" {
+		q.Set("include_granted_scopes", "true")
 		q.Set("access_type", "offline")
 		q.Set("prompt", "consent")
 	}

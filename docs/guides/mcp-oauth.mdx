@@ -37,9 +37,14 @@ issuer; missing or mismatched values produce a failed result with
 States expire after ten minutes, are encrypted in the database, survive a
 gateway restart and are consumed once, even with concurrent completions.
 The completing caller must have member-or-admin access to the state's vault.
-Invalid, expired or replayed states return `400 invalid_state`. Account
-identity is `null` when the provider has not supplied verified identity data;
-the gateway does not invent an account name or decode an unverified ID token.
+Invalid, expired or replayed states return `400 invalid_state`. When a token
+response includes an ID token and metadata publishes `jwks_uri`, the gateway
+verifies its RS256/ES256 signature, issuer, audience/authorized party, expiration,
+issued-at, nonce and optional access-token hash before using `email` or
+`preferred_username`. Supported identity scopes are requested when advertised.
+No unverified ID token is decoded for display. Verification failures warn
+without failing sign-in and leave `account` null. Completion and lists return
+the verified label; stable subjects remain encrypted and private.
 
 The optional progress-polling endpoint is not implemented. NanoClaw uses the
 completion result and notifies the opening window, then reloads the account

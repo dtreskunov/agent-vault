@@ -54,9 +54,18 @@ and consent. Replacement reconnects an existing account of the same provider.
 
 The list uses the MCP account metadata shape with `kind:"oauth_app"`,
 `provider`, `scope_sets`, `scopes`, `connected_at`, `updated_at`,
-`last_used_at`, `status` and `client:"app"`. The `account` identity is null
-until verified provider identity retrieval is implemented; no unverified ID
-token is interpreted.
+`last_used_at`, `status` and `client:"app"`. `account` is the verified Google
+email or GitHub login when available. Google requests `openid email` and
+retrieves identity from its HTTPS OIDC userinfo endpoint; GitHub uses its
+authenticated `/user` endpoint. Stable subjects are encrypted internally and
+never returned. Completion also includes the verified `account` label.
+
+Identity lookup failures log a warning but do not fail sign-in; the label stays
+null. Existing accounts gain identity on their next sign-in, not by trusting old
+unverified token claims. Google requests `include_granted_scopes=true`.
+Connecting the same verified provider subject again in one vault without
+`replace_key` reuses the existing key and unions scope sets. Explicit replacement
+keeps its requested key. Unverified identities are never used to deduplicate.
 
 Successful completion atomically stores the account, encrypted token and
 generated `oauth-*` bearer services for the granted scope sets. Granting no
