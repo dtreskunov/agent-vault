@@ -13,7 +13,7 @@ require (
 	github.com/muesli/reflow v0.3.0
 	github.com/posthog/posthog-go v1.24.4
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/term v0.45.0
