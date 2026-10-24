@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
-	"embed"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -37,9 +37,6 @@ import (
 	"github.com/Infisical/agent-vault/internal/statickeys"
 	"github.com/Infisical/agent-vault/internal/telemetry"
 )
-
-//go:embed all:webdist
-var webDistFS embed.FS
 
 //go:embed invite_email.html
 var userInviteEmailHTML string

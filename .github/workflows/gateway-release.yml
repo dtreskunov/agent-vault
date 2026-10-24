@@ -1,0 +1,141 @@
+name: Gateway release
+
+on:
+  push:
+    tags: ["gw-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version embedded in dry-run artifacts (no release is published)"
+        required: true
+        default: "gw-v0.1.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'dtreskunov/agent-vault'
+    runs-on: ubuntu-latest
+    env:
+      GATEWAY_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Reject enterprise-only directories
+        run: python3 scripts/check-no-ee.py
+
+      - name: Prepare test-only web assets
+        run: |
+          mkdir -p internal/server/webdist
+          printf '<!doctype html><title>ci-stub</title>' > internal/server/webdist/index.html
+
+      - name: Run readonly tests, race tests, vet and telemetry-free tests
+        run: |
+          go test -mod=readonly ./...
+          go test -mod=readonly -race ./internal/oauthidentity ./internal/mcpauth/... ./internal/statickeys ./internal/server ./internal/mitm
+          go vet -mod=readonly ./...
+          go test -mod=readonly -tags notelemetry ./...
+          go test -mod=readonly -tags notelemetry,noinfisical ./...
+
+      - name: Build static gateway binaries
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            GOOS="$os" GOARCH="$arch" sh scripts/build-gateway.sh "$GATEWAY_VERSION" \
+              "$PWD/dist/agent-vault_${GATEWAY_VERSION}_${os}_${arch}"
+          done
+          cp LICENSE dist/LICENSE
+          cp internal/mcpauth/oauthex/LICENSE dist/MCP-SDK-LICENSE
+          cp internal/mcpauth/oauthex/NOTICE dist/MCP-SDK-NOTICE
+
+      - name: Prove checkout and archive builds match
+        run: |
+          archive=$(mktemp -d)
+          git archive HEAD | tar -x -C "$archive"
+          (
+            cd "$archive"
+            GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh "$GATEWAY_VERSION" "$archive/rebuilt"
+          )
+          cmp "dist/agent-vault_${GATEWAY_VERSION}_linux_amd64" "$archive/rebuilt"
+          rm "$archive/rebuilt"
+
+      - name: Install pinned vulnerability scanner
+        run: GOTOOLCHAIN="$(go env GOVERSION)" go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Scan exact released source configurations
+        env:
+          GOMEMLIMIT: 768MiB
+          GOGC: "25"
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 \
+              govulncheck -tags noui,notelemetry,noinfisical .
+          done
+
+      - name: Write checksums
+        run: |
+          cd dist
+          sha256sum agent-vault_* LICENSE MCP-SDK-LICENSE MCP-SDK-NOTICE > SHA256SUMS
+
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            dist/agent-vault_*
+            dist/SHA256SUMS
+
+      - name: Preserve provenance bundle
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" dist/build-provenance.jsonl
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-release
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/gw-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gateway-release
+          path: dist
+
+      - name: Publish pinned gateway release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GATEWAY_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$GATEWAY_TAG" dist/* --verify-tag \
+            --title "Agent Vault gateway $GATEWAY_TAG" \
+            --notes "Static telemetry-free gateway binaries. Verify SHA256SUMS and the GitHub build-provenance attestation before installation. See docs/guides/gateway-releases.mdx."

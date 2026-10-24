@@ -29,6 +29,10 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `--database-url` | (empty, SQLite) | PostgreSQL connection URL for [production deployments](/self-hosting/postgres). When set, Agent Vault uses Postgres instead of the built-in SQLite database. Also respects `DATABASE_URL`; the flag takes precedence. |
     | `--telemetry` | `false` | Opt in to anonymous usage telemetry. The `AGENT_VAULT_TELEMETRY` env var takes precedence. Builds using `-tags notelemetry` cannot enable it. |
 
+    Canonical gateway releases additionally use `noui,noinfisical`; they omit
+    generated frontend assets and the optional Infisical external-store SDK.
+    See [Gateway releases](/guides/gateway-releases).
+
     **Environment variables:**
 
     | Variable | Description |

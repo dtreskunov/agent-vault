@@ -76,6 +76,8 @@ vault overrides and provider-account sign-in for Google and GitHub.
 updates, safe per-service edits and coalesced usage timestamps.
 [OAuth token stubs](docs/guides/oauth-token-stubs.mdx) keep real provider
 tokens out of stdio MCP client configuration.
+[Gateway releases](docs/guides/gateway-releases.mdx) use one reproducible build
+command with pinned versions, SHA-256 checksums and keyless build provenance.
 
 Agent Vault is both a vault and proxy service and ships as a single binary that acts as both a server and CLI client. It stores credentials and brokers them to your AI agents using a MITM proxy architecture. By design, Agent Vault is meant to be deployed on a separate machine from your AI agents to provide the security guarantee needed so your AI agents cannot directly access the credentials within Agent Vault.
 

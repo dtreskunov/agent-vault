@@ -1,0 +1,107 @@
+---
+title: "Gateway releases"
+description: "Pinned, reproducible gateway binaries with checksums and provenance."
+---
+
+## Build command
+
+From a checkout **or an export of the same commit**, run:
+
+```bash
+GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.1.0 "$PWD/agent-vault"
+```
+
+This is the canonical gateway build command. The script selects the exact Go
+toolchain declared in `go.mod`, sets `CGO_ENABLED=0`, uses readonly modules,
+`noui,notelemetry,noinfisical`, `-trimpath`, `-buildvcs=false`, and an explicit version
+ldflag. It clears the build ID and ambient Go flags/experiments. Commit/time
+metadata is deliberately not embedded; provenance binds the binary to source.
+Checkouts and archives must use identical source, version, OS and architecture.
+
+The `noui` tag uses a committed minimal no-UI page rather than locally generated
+Vite assets. Local frontend builds therefore cannot alter release checksums.
+The approved gateway-only `noinfisical` tag excludes the unused external-store
+SDK and its cloud/gRPC dependencies; configured external-store access returns
+an explicit unavailable error. Normal builds retain upstream Infisical support.
+Continue to configure `AGENT_VAULT_HEADLESS=true` and
+`AGENT_VAULT_REVEAL_DISABLED=true` for the gateway's runtime account policy.
+
+Supported release targets are Linux amd64, Linux arm64 and macOS arm64. The
+standalone binaries are named `agent-vault_<version>_<os>_<arch>`. License and
+MCP SDK license/NOTICE files are distributed alongside them.
+
+## Release workflow
+
+The `Gateway release` workflow runs on `gw-v*` tags. It runs the readonly suite,
+targeted race tests, vet and telemetry-free tests; builds all targets; compares
+checkout/archive output; runs pinned `govulncheck` source/call-graph scans for
+**each shipped target with the exact release tags**; writes `SHA256SUMS`; and
+generates keyless GitHub build-provenance attestations. The approved Infisical
+exclusion makes source analysis practical and avoids shipping unused cloud
+dependencies. Scanner failures block publication; they are not replaced with
+clean results.
+
+The source scan distinguishes actual imported/called code from module-only
+advisories. The old binary scanner can conservatively flag the unimported,
+unmaintained OpenPGP package simply because the binary requires x/crypto for
+Argon2. No OpenPGP or SSH code is included in gateway releases. Do not interpret
+the module-only advisory as a clean full upstream/Infisical build: normal
+non-gateway builds retain their upstream dependency surface.
+
+`workflow_dispatch` runs the same checks, builds and attestations but **never
+publishes a release**. Download the workflow artifact for inspection:
+
+```bash
+gh workflow run gateway-release.yml --repo dtreskunov/agent-vault \
+  --ref bananaclaw -f version=gw-v0.1.0
+gh run list --repo dtreskunov/agent-vault --workflow gateway-release.yml
+gh run download <run-id> --repo dtreskunov/agent-vault \
+  --name gateway-release --dir gateway-dry-run
+```
+
+Run this dry-run successfully before tagging. **Ask Denis before pushing the
+first tag** (`gw-v0.1.0` is proposed). No tag is created by the build command or
+manual workflow dispatch.
+
+## Verifying a release
+
+Pin the version and platform; do not install an unpinned `latest` binary:
+
+```bash
+version=gw-v0.1.0
+asset="agent-vault_${version}_linux_amd64"
+gh release download "$version" --repo dtreskunov/agent-vault \
+  --pattern "$asset" --pattern SHA256SUMS --pattern build-provenance.jsonl
+grep "  ${asset}$" SHA256SUMS > selected-checksum
+test "$(wc -l < selected-checksum)" -eq 1
+sha256sum --check selected-checksum
+gh attestation verify "$asset" --repo dtreskunov/agent-vault \
+  --signer-workflow dtreskunov/agent-vault/.github/workflows/gateway-release.yml
+```
+
+For local/offline bundle verification where supported by your GitHub CLI:
+
+```bash
+gh attestation verify "$asset" --repo dtreskunov/agent-vault \
+  --bundle build-provenance.jsonl \
+  --signer-workflow dtreskunov/agent-vault/.github/workflows/gateway-release.yml
+```
+
+The checksum proves bytes match the manifest; the attestation verifies those
+bytes were built by the expected repository/workflow. Inspect the attested
+source commit/tag before trusting it. A checksum alone is not provenance.
+
+Optionally rebuild the pinned tag and compare:
+
+```bash
+git clone --branch "$version" --depth 1 \
+  https://github.com/dtreskunov/agent-vault.git gateway-source
+(
+  cd gateway-source
+  GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh "$version" "$PWD/rebuilt"
+)
+cmp "$asset" gateway-source/rebuilt
+```
+
+Do not replace the live canary or restart its service from a release-validation
+run. The NanoClaw deployment agent handles installation after approval.
