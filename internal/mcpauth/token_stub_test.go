@@ -27,10 +27,10 @@ func TestSyntheticRefreshThroughProxyNeverContactsProvider(t *testing.T) {
 	remote := &providerTransport{t: t}
 	m.client.Transport = remote
 	secret := "synthetic"
-	if _, err := m.PutApp(context.Background(), "", "google", AppInput{ClientID: "google", ClientSecret: &secret}); err != nil {
+	if _, err := m.PutApp(context.Background(), "", "google", testAppInput("google", "google", &secret)); err != nil {
 		t.Fatal(err)
 	}
-	start, err := m.StartProvider(context.Background(), vault, "google", []string{"gmail-read"}, "")
+	start, err := m.StartAccount(context.Background(), vault, "google", []string{gmailReadScope}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,10 +114,20 @@ func TestSyntheticRefreshThroughProxyNeverContactsProvider(t *testing.T) {
 }
 
 func TestTokenHostAndNonPlaceholderPassThrough(t *testing.T) {
-	if !InterceptTokenHost("oauth2.googleapis.com", 443) || InterceptTokenHost("oauth2.googleapis.com", 80) || InterceptTokenHost("evil.example.com", 443) {
-		t.Fatal("token-host interception too broad")
-	}
 	m, _, vault := testManager(t)
+	secret := "synthetic"
+	if _, err := m.PutApp(context.Background(), "", "google", testAppInput("google", "google", &secret)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		host string
+		port int
+		want bool
+	}{{"oauth2.googleapis.com", 443, true}, {"oauth2.googleapis.com", 80, false}, {"evil.example.com", 443, false}} {
+		if got, err := m.InterceptTokenHost(context.Background(), tc.host, tc.port); err != nil || got != tc.want {
+			t.Fatal("token-host interception incorrect", err)
+		}
+	}
 	form := "grant_type=refresh_token&refresh_token=ordinary-token"
 	r, _ := http.NewRequest("POST", "https://oauth2.googleapis.com/token", strings.NewReader(form))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -126,4 +136,95 @@ func TestTokenHostAndNonPlaceholderPassThrough(t *testing.T) {
 	if err != nil || response != nil || string(body) != form {
 		t.Fatal("ordinary refresh was not preserved")
 	}
+	for _, body := range []string{`{"ordinary":"%not-form-encoded"}`, strings.Repeat("ordinary-json-body", 10000)} {
+		request, _ := http.NewRequest("POST", "https://oauth2.googleapis.com/unrelated-path", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response, err := m.TokenResponse(context.Background(), vault, request)
+		replayed, readErr := io.ReadAll(request.Body)
+		request.Body.Close()
+		if err != nil || readErr != nil || response != nil || string(replayed) != body {
+			t.Fatal("ordinary non-token request was changed at a known authority")
+		}
+	}
+}
+
+func TestGenericTokenAuthoritiesRejectWrongEndpointsAcrossRestartAndDeletion(t *testing.T) {
+	m, db, vault := testManager(t)
+	ctx := context.Background()
+	remote := &providerTransport{t: t}
+	m.client.Transport = remote
+	secret := "synthetic-secret"
+	keys := map[string]string{}
+	for _, id := range []string{"google", "github"} {
+		if _, err := m.PutApp(ctx, "", id, testAppInput(id, id, &secret)); err != nil {
+			t.Fatal(err)
+		}
+		start, err := m.StartAccount(ctx, vault, id, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := m.Complete(ctx, oauthrelay.Input{State: start.State, Code: "code"}, nil)
+		if err != nil || result.Status != "connected" {
+			t.Fatal(err)
+		}
+		keys[id] = result.Key
+	}
+	empty, err := db.CreateVault(ctx, "empty-stub-vault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(manager *Manager, vault, method, endpoint, key string, want int) {
+		t.Helper()
+		data := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {RefreshPlaceholderPrefix + key}}.Encode()
+		request, err := http.NewRequest(method, endpoint, strings.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response, err := manager.TokenResponse(ctx, vault, request)
+		if err != nil || response == nil {
+			t.Fatal("known token authority failed to intercept", err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil || response.StatusCode != want || strings.Contains(string(body), "synthetic-") {
+			t.Fatalf("stub did not enforce account/endpoint binding: status=%d want=%d", response.StatusCode, want)
+		}
+		if response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("stub response can be cached")
+		}
+		if want == 200 {
+			var token struct {
+				Access  string `json:"access_token"`
+				Refresh string `json:"refresh_token"`
+			}
+			if err := json.Unmarshal(body, &token); err != nil || token.Access != AccessPlaceholderPrefix+key || token.Refresh != RefreshPlaceholderPrefix+key {
+				t.Fatal("stub response contains incorrect synthetic tokens")
+			}
+		}
+	}
+	github := "https://github.com/login/oauth/access_token"
+	check(m, vault, "POST", github, keys["github"], 200)
+	check(m, vault, "POST", "https://oauth2.googleapis.com/token", keys["google"], 200)
+	check(m, vault, "POST", github, keys["google"], 400)
+	check(m, vault, "POST", "https://oauth2.googleapis.com/token", keys["github"], 400)
+	check(m, vault, "POST", github+"/", keys["github"], 400)
+	check(m, vault, "POST", github+"-near-miss", keys["github"], 400)
+	check(m, vault, "POST", github+"?different=endpoint", keys["github"], 400)
+	check(m, vault, "GET", github, keys["github"], 400)
+	check(m, vault, "POST", github, "OAUTH_UNKNOWN", 400)
+	check(m, empty.ID, "POST", github, keys["github"], 400)
+	if remote.refreshes != 0 || remote.exchanges != 2 {
+		t.Fatal("synthetic refresh contacted a provider")
+	}
+	if err := m.DeleteApp(ctx, "", "github"); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, dialect := db.GatewaySQL()
+	restarted := New(db, NewRepository(sqlDB, dialect, make([]byte, 32)), m.config, m.logger)
+	if intercept, err := restarted.InterceptTokenHost(ctx, "github.com", 443); err != nil || !intercept {
+		t.Fatal("restart or app deletion forgot a known token authority")
+	}
+	check(restarted, vault, "POST", github, keys["github"], 400)
+	check(restarted, empty.ID, "POST", github, keys["github"], 400)
 }

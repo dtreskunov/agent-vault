@@ -21,8 +21,8 @@ sessions cannot manage accounts.
 
 | Purpose | Request | Response |
 | --- | --- | --- |
-| Probe | `POST /v1/vaults/{vault}/mcp-oauth/probe {resource_url}` | `200 {oauth,issuer?,client?,code?,provider?}` |
-| Start | `POST /v1/vaults/{vault}/mcp-oauth/start {resource_url,client_name?}` | `200 {state,authorize_url}` |
+| Probe | `POST /v1/vaults/{vault}/mcp-oauth/probe {resource_url,app_id?}` | `200 {oauth,issuer?,client?,code?,app_id?}` |
+| Start | `POST /v1/vaults/{vault}/mcp-oauth/start {resource_url,client_name?,app_id?}` | `200 {state,authorize_url}` |
 | Complete | `POST /v1/oauth/complete {state,code,iss?}` | `200 {status,vault,key?,account?,code?,error?}` |
 | List | `GET /v1/vaults/{vault}/mcp-oauth` | `200 [{key,resource_url,account,connected_at,last_used_at,updated_at,status,client,scopes}]` |
 | Disconnect | `DELETE /v1/vaults/{vault}/mcp-oauth/{key}` | `204`; unknown account: `404` |
@@ -68,13 +68,15 @@ access token are encrypted in that vault. Different vaults never reuse a
 dynamic registration. Confidential client authentication is retained when
 the server requires it.
 
-Without registration, client selection tries the vault's configured catalog
-app, then the install-wide app, then the public client-metadata URL if the
-server advertises CIMD support. If none applies, the error is
-`registration_unsupported`; a matching catalog issuer includes `provider`
-(`google` or `github`). OAuth-app storage/lookup primitives are present, but
-the [install/vault app-management APIs](/guides/oauth-apps) configure these
-apps. Google and GitHub provider accounts use the same completion relay.
+An explicit `app_id` selects an effective configured app whose issuer must match
+discovery. Otherwise registration retains preference, followed by the unique
+configured app matching the issuer (same-ID vault overrides hide install apps),
+then the public client-metadata URL if CIMD is supported. Multiple matching apps
+return `409 ambiguous_app`; no match without CIMD returns
+`registration_unsupported` with issuer information. Use the generic
+[install/vault app APIs](/guides/oauth-apps) to configure and enumerate apps.
+Direct API accounts use the same completion relay but different, host-wide
+routing; MCP accounts never inherit those API-host routes.
 
 Probing does not register a client or begin a sign-in. All discovery,
 registration, exchange, refresh and cleanup traffic uses the network guard.

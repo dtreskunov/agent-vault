@@ -24,11 +24,11 @@ type Discovery struct {
 }
 
 type ProbeInfo struct {
-	OAuth    bool   `json:"oauth"`
-	Issuer   string `json:"issuer,omitempty"`
-	Client   string `json:"client,omitempty"`
-	Code     string `json:"code,omitempty"`
-	Provider string `json:"provider,omitempty"`
+	OAuth  bool   `json:"oauth"`
+	Issuer string `json:"issuer,omitempty"`
+	Client string `json:"client,omitempty"`
+	Code   string `json:"code,omitempty"`
+	AppID  string `json:"app_id,omitempty"`
 }
 
 func guardedClient() *http.Client {
@@ -167,8 +167,8 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 }
 
 func (a Account) services() ([]broker.Service, error) {
-	if a.Provider != "" {
-		return a.providerServices()
+	if accountType(a) == "oauth_app" {
+		return a.apiServices()
 	}
 	u, err := url.Parse(a.ResourceURL)
 	if err != nil {

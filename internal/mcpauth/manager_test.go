@@ -420,13 +420,13 @@ func TestDiscoveryOIDCFallbackAndMetadataClient(t *testing.T) {
 	}
 }
 
-func TestCatalogAppPreferenceAndUnsupportedProvider(t *testing.T) {
+func TestConfiguredAppPreferenceAndUnsupportedIssuer(t *testing.T) {
 	m, _, vault := testManager(t)
 	discovery := &Discovery{Server: oauthex.AuthServerMeta{Issuer: "https://github.com/login/oauth", ClientIDMetadataDocumentSupported: false}}
 	if _, err := m.chooseClient(context.Background(), vault, discovery, false, ""); err == nil {
 		t.Fatal("missing app did not fail")
-	} else if unsupported, ok := err.(*Failure); !ok || unsupported.Code != "registration_unsupported" || unsupported.Provider != "github" {
-		t.Fatal("missing catalog provider hint")
+	} else if unsupported, ok := err.(*Failure); !ok || unsupported.Code != "registration_unsupported" {
+		t.Fatal("missing unsupported-registration error")
 	}
 	if err := m.StoreApp(context.Background(), "", Client{Issuer: discovery.Server.Issuer, ID: "install-client", Secret: "synthetic-install-secret"}); err != nil {
 		t.Fatal(err)

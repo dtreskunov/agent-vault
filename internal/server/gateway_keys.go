@@ -159,6 +159,10 @@ func (s *Server) allowServiceMutation(w http.ResponseWriter, ctx context.Context
 		jsonError(w, 409, err.Error())
 		return false
 	}
+	if err := broker.ValidateExclusiveHosts(after); err != nil {
+		jsonCodedError(w, 409, "service_conflict", err.Error())
+		return false
+	}
 	for _, service := range after {
 		if statickeys.Managed(service.Name) {
 			continue

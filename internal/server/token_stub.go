@@ -5,13 +5,18 @@ import (
 	"net/http"
 
 	"github.com/Infisical/agent-vault/internal/blindtunnel"
-	"github.com/Infisical/agent-vault/internal/mcpauth"
 )
 
 func (s *Server) GatewayConnectPolicy(base func(context.Context, string, string, int) (blindtunnel.Mode, error)) func(context.Context, string, string, int) (blindtunnel.Mode, error) {
 	return func(ctx context.Context, vault, host string, port int) (blindtunnel.Mode, error) {
-		if mcpauth.InterceptTokenHost(host, port) {
-			return blindtunnel.MITM, nil
+		if s.mcpOAuth != nil {
+			intercept, err := s.mcpOAuth.InterceptTokenHost(ctx, host, port)
+			if err != nil {
+				return "", err
+			}
+			if intercept {
+				return blindtunnel.MITM, nil
+			}
 		}
 		return base(ctx, vault, host, port)
 	}

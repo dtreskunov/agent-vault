@@ -28,9 +28,9 @@ func TestGitHubAppRevocationAndCommaScopes(t *testing.T) {
 	m, _, _ := testManager(t)
 	transport := &githubRevocationTransport{t: t}
 	m.client.Transport = transport
-	a := Account{Provider: "github", ScopeSets: []string{"repo"}, Issuer: "https://github.com/login/oauth", AccessToken: "synthetic-token",
-		Client: Client{Kind: "app", ID: "client", Secret: "synthetic-secret"}}
-	if err := grantedScopeSets(&a, "repo,read:user"); err != nil {
+	a := Account{AppID: "github", Issuer: "https://github.com/login/oauth", AccessToken: "synthetic-token",
+		Client: Client{Kind: "app", ID: "client", Secret: "synthetic-secret", Config: AppConfig{TokenScopeSeparator: "comma"}}}
+	if err := recordScopes(&a, "repo,read:user"); err != nil {
 		t.Fatal("GitHub comma-delimited grants rejected")
 	}
 	m.revoke(context.Background(), &a)

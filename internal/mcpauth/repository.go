@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,7 +89,7 @@ func (r *Repository) Account(ctx context.Context, vault, key string) (*Account, 
 
 func (r *Repository) Accounts(ctx context.Context, vault string) ([]Account, error) {
 	rows, err := r.db.QueryContext(ctx, r.dialect.Rebind(
-		`SELECT ciphertext,nonce FROM gateway_oauth_records WHERE vault_id=? AND kind='account' ORDER BY record_key`), vault)
+		`SELECT record_key,ciphertext,nonce FROM gateway_oauth_records WHERE vault_id=? AND kind='account' ORDER BY record_key`), vault)
 	if err != nil {
 		return nil, err
 	}
@@ -95,12 +97,16 @@ func (r *Repository) Accounts(ctx context.Context, vault string) ([]Account, err
 	accounts := make([]Account, 0)
 	for rows.Next() {
 		var ct, nonce []byte
+		var key string
 		var account Account
-		if err := rows.Scan(&ct, &nonce); err != nil {
+		if err := rows.Scan(&key, &ct, &nonce); err != nil {
 			return nil, err
 		}
 		if err := r.decode(ct, nonce, &account); err != nil {
 			return nil, err
+		}
+		if account.Key != key {
+			return nil, fmt.Errorf("MCP account key mismatch")
 		}
 		accounts = append(accounts, account)
 	}
@@ -140,6 +146,13 @@ func (r *Repository) saveAccount(ctx context.Context, vault string, a *Account, 
 		return err
 	}
 	defer tx.Rollback()
+	if err := r.writeAccount(ctx, tx, vault, a, connect); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) writeAccount(ctx context.Context, tx *sql.Tx, vault string, a *Account, connect bool) error {
 	if err := r.put(ctx, tx, vault, "account", a.Key, a, 0); err != nil {
 		return err
 	}
@@ -167,31 +180,73 @@ func (r *Repository) saveAccount(ctx context.Context, vault string, a *Account, 
 			return err
 		}
 	}
-	return tx.Commit()
+	return r.rememberTokenAuthority(ctx, tx, a.Metadata.TokenEndpoint)
 }
 
-func (r *Repository) updateServices(ctx context.Context, tx *sql.Tx, vault string, account *Account, remove bool) error {
+func (r *Repository) services(ctx context.Context, tx *sql.Tx, vault string) ([]broker.Service, error) {
 	var raw string
 	err := tx.QueryRowContext(ctx, r.dialect.Rebind(`SELECT services_json FROM broker_configs WHERE vault_id=?`), vault).Scan(&raw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return nil, err
 	}
 	services := make([]broker.Service, 0)
 	if raw != "" {
 		if err := json.Unmarshal([]byte(raw), &services); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	name := servicePrefix(*account)
+	for i := range services {
+		services[i].Host, services[i].Path, services[i].Port = broker.SplitInlineHost(services[i].Host, services[i].Path)
+	}
+	return services, nil
+}
+
+func generatedName(a Account, name string) bool {
+	prefix := servicePrefix(a)
+	if accountType(a) == "mcp_oauth" {
+		return name == prefix || name == prefix+"-children"
+	}
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, prefix)
+	if len(suffix) == 1 && suffix[0] >= 'a' && suffix[0] <= 'z' {
+		return true
+	}
+	index, err := strconv.Atoi(suffix)
+	return err == nil && index >= 0 && strconv.Itoa(index) == suffix
+}
+
+func accountOwns(a Account, service broker.Service) (bool, error) {
+	if !generatedName(a, service.Name) {
+		return false, nil
+	}
+	if !reflect.DeepEqual(service.Auth, broker.Auth{Type: "bearer", Token: a.Key}) || len(service.Substitutions) != 0 {
+		return false, failure("service_conflict", "Generated OAuth service name is owned by a different credential or configuration")
+	}
+	return true, nil
+}
+
+func (r *Repository) updateServices(ctx context.Context, tx *sql.Tx, vault string, account *Account, remove bool) error {
+	services, err := r.services(ctx, tx, vault)
+	if err != nil {
+		return err
+	}
 	kept := services[:0]
+	var enabled *bool
+	sawOwned := false
 	for _, service := range services {
-		owned := service.Name == name || service.Name == name+"-children"
-		if account.Provider != "" {
-			owned = strings.HasPrefix(service.Name, name)
+		owned, err := accountOwns(*account, service)
+		if err != nil {
+			return err
 		}
 		if !owned {
-			service.Host, service.Path, service.Port = broker.SplitInlineHost(service.Host, service.Path)
 			kept = append(kept, service)
+		} else if !remove {
+			if sawOwned && (enabled == nil || *enabled) != service.IsEnabled() {
+				return failure("service_conflict", "Generated OAuth services have inconsistent enabled states")
+			}
+			enabled, sawOwned = service.Enabled, true
 		}
 	}
 	if !remove {
@@ -199,11 +254,13 @@ func (r *Repository) updateServices(ctx context.Context, tx *sql.Tx, vault strin
 		if err != nil {
 			return err
 		}
-		for _, candidate := range added {
+		for i := range added {
+			added[i].Enabled = enabled
+			candidate := added[i]
 			for _, existing := range kept {
-				if strings.EqualFold(existing.Host, candidate.Host) && existing.Path == candidate.Path &&
-					broker.PortVal(existing.Port) == broker.PortVal(candidate.Port) {
-					return failure("service_conflict", "An existing service already owns this MCP destination; remove it before signing in")
+				if broker.HostsOverlap(existing, candidate) && (candidate.HTTPSOnly || existing.HTTPSOnly ||
+					(existing.Path == candidate.Path && broker.PortVal(existing.Port) == broker.PortVal(candidate.Port))) {
+					return failure("service_conflict", "An existing service or account already owns this OAuth destination")
 				}
 			}
 		}
@@ -230,6 +287,13 @@ func (r *Repository) removeAccount(ctx context.Context, vault string, a *Account
 		return err
 	}
 	defer tx.Rollback()
+	if err := r.deleteAccount(ctx, tx, vault, a, removeClient); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) deleteAccount(ctx context.Context, tx *sql.Tx, vault string, a *Account, removeClient bool) error {
 	if err := r.updateServices(ctx, tx, vault, a, true); err != nil {
 		return err
 	}
@@ -249,5 +313,5 @@ func (r *Repository) removeAccount(ctx context.Context, vault string, a *Account
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }

@@ -107,43 +107,50 @@ func (m *Manager) retireClient(ctx context.Context, vault string, old Client) {
 }
 
 func (m *Manager) app(ctx context.Context, vault, issuer string) (*Client, error) {
-	id := provider(issuer)
-	if id == "" {
-		return nil, sql.ErrNoRows
-	}
-	client, err := m.storedApp(ctx, vault, id)
-	if err == nil {
-		if client.Issuer != issuer {
-			return nil, failure("invalid_app", "Configured OAuth app issuer does not match discovery")
-		}
-		client.Kind, client.Source = "app", "vault"
-		return client, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	client, err = m.storedApp(ctx, "", id)
+	clients, err := m.configuredApps(ctx, vault)
 	if err != nil {
 		return nil, err
 	}
-	if client.Issuer != issuer {
-		return nil, failure("invalid_app", "Install OAuth app issuer does not match discovery")
+	var selected *Client
+	for _, client := range clients {
+		if client.Issuer == issuer {
+			if selected != nil {
+				return nil, failure("ambiguous_app", "Multiple configured apps match this issuer; specify app_id")
+			}
+			selected = &client
+		}
 	}
-	client.Kind, client.Source = "app", "install"
-	return client, nil
+	if selected == nil {
+		return nil, sql.ErrNoRows
+	}
+	return selected, nil
 }
 
 // StoreApp retains the initial setup helper for programmatic callers.
 // An empty vault selects the instance app; this is not exposed to socket sessions.
 func (m *Manager) StoreApp(ctx context.Context, vault string, client Client) error {
-	id := provider(client.Issuer)
-	if id == "" || client.ID == "" || client.Secret == "" {
-		return failure("invalid_app", "A catalog provider, client ID and secret are required")
+	id := client.AppID
+	if id == "" {
+		id = "app-" + digest(client.Issuer)[:16]
 	}
-	_, err := m.PutApp(ctx, vault, id, AppInput{ClientID: client.ID, ClientSecret: &client.Secret})
+	_, err := m.PutApp(ctx, vault, id, AppInput{ClientID: client.ID, ClientSecret: &client.Secret, Issuer: &client.Issuer})
 	return err
 }
 
-func (m *Manager) chooseClient(ctx context.Context, vault string, discovery *Discovery, register bool, name string) (*Client, error) {
+func (m *Manager) chooseClient(ctx context.Context, vault string, discovery *Discovery, register bool, name string, appID ...string) (*Client, error) {
+	if len(appID) != 0 && appID[0] != "" {
+		if err := appIDValid(appID[0]); err != nil {
+			return nil, err
+		}
+		client, err := m.effectiveApp(ctx, vault, appID[0])
+		if err != nil {
+			return nil, err
+		}
+		if client.Issuer != discovery.Server.Issuer {
+			return nil, failure("invalid_app", "Configured app does not match the discovered issuer")
+		}
+		return client, nil
+	}
 	if discovery.Server.RegistrationEndpoint != "" {
 		if !register {
 			return &Client{Kind: "registered"}, nil

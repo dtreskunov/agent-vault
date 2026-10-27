@@ -25,7 +25,7 @@ func TestLiveGitHubProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !probe.OAuth || probe.Code != "registration_unsupported" || probe.Provider != "github" {
+	if !probe.OAuth || probe.Code != "registration_unsupported" || probe.Issuer != "https://github.com/login/oauth" {
 		t.Fatalf("unexpected probe metadata: %+v", probe)
 	}
 }

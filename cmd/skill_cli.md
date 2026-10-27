@@ -29,14 +29,19 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 OAuth completion and account lists return `account` only from an authenticated
 provider identity API or a fully signature-verified OIDC ID token. Identity
 failure leaves it null without failing sign-in. Stable subjects are private.
-Repeated provider sign-in with the same verified subject reuses the account
-key and unions scope sets unless `replace_key` explicitly selects a target.
+Repeated sign-in with the same verified subject reuses the account key only
+inside the same vault, issuer and issuing-app binding, unless `replace_key`
+explicitly selects a target. Reported OAuth scopes are authoritative, never
+blindly unioned with earlier requested scopes.
 
 For stdio MCP OAuth clients, configure `av-refresh:<provider account key>`
 as the refresh token and `av-access:<key>` as the access token. The gateway
-answers catalog token-endpoint refreshes with synthetic tokens only when the
-account belongs to the proxy's vault. The synthetic response never contacts
-the provider; real refresh/injection happens on the subsequent API request.
+intercepts persistently known token authorities independently of the caller's
+vault and answers exact account-pinned token-endpoint refreshes synthetically
+only for that vault's connected account. Unknown/disconnected, wrong-endpoint
+and cross-vault placeholders are rejected locally at known authorities.
+Unknown blindly tunnelled hosts are not inspected. Synthetic responses never
+contact the provider; real refresh/injection happens on the API request.
 
 For static keys, the host can use
 `PUT /v1/vaults/{vault}/keys/{KEY} {value?,service}` to update a key and
@@ -45,14 +50,27 @@ PUT/DELETE uses `/v1/vaults/{vault}/services/{name}`; generated `mcp-*`
 and `oauth-*` services are protected. Credential lists include `updated_at`
 and nullable, coalesced `last_used_at`.
 
-OAuth apps use `GET|PUT|DELETE /v1/oauth-apps/{provider}` (owner) or
-`/v1/vaults/{vault}/oauth-apps/{provider}` (vault admin for writes).
-PUT body is `{client_id,client_secret?}`; the secret is required for a new ID
-and never returned. `GET /v1/oauth/providers` supplies the provider/scope-set
-catalog. Provider-account sign-in starts at
-`POST /v1/vaults/{vault}/oauth-accounts/start {provider,scope_sets,replace_key?}`.
+OAuth apps use `GET|PUT|DELETE /v1/oauth-apps/{app_id}` (owner) or
+`/v1/vaults/{vault}/oauth-apps/{app_id}` (member reads, admin writes).
+Collection GETs at `/v1/oauth-apps` and `/v1/vaults/{vault}/oauth-apps`
+return `{items:[...]}` with effective install/vault configuration and source.
+App IDs are arbitrary slugs, not a provider enum. Configure issuer, client ID,
+write-only secret, token auth method, authorization/token endpoints, exact
+API hosts, optional default scope strings, authorization options and identity
+verification. Public clients use auth method `none`; confidential binding
+changes require a supplied secret. No OAuth catalog endpoint exists.
+API-account sign-in starts at
+`POST /v1/vaults/{vault}/oauth-accounts/start {app_id,scopes?,replace_key?}`.
+Omitted scopes uses app defaults; `[]` requests no scopes. `scope_sets` is not
+supported. API hosts select credentials for every HTTPS path; the provider
+enforces token permissions. Overlapping recipients in one vault fail explicitly.
 List/disconnect use `/v1/vaults/{vault}/oauth-accounts[/{key}]`.
-Changing/deleting an app disconnects accounts issued to that app source.
+Lists expose requested/granted/effective scopes and their provenance, API
+hosts and issuing-app source, never tokens or private identity subjects.
+Changing an app's client binding or deleting it disconnects only its issued
+accounts. Other configuration affects new sign-ins; existing accounts pin
+their endpoints, API hosts and issuing source. Secret-only rotation retains
+accounts. There is no capability negotiation or old catalog API adapter.
 
 NanoClaw hosts can complete public OAuth redirects with
 `POST /v1/oauth/complete {state,code,iss?}` using their agent bearer token.
@@ -62,14 +80,15 @@ metadata comes from `GET /v1/oauth/client-metadata`; NanoClaw republishes it at
 its UI origin's `/oauth/client-metadata.json`.
 
 For MCP OAuth, the host probes/starts sign-in with
-`POST /v1/vaults/{vault}/mcp-oauth/probe` or `/start`, body `{resource_url}`.
+`POST /v1/vaults/{vault}/mcp-oauth/probe` or `/start`, body `{resource_url,app_id?}`.
 Start returns `{state,authorize_url}`. Forward the public callback's `iss`
 unchanged; providers advertising RFC 9207 require it. List metadata with
 `GET /v1/vaults/{vault}/mcp-oauth` and disconnect with
 `DELETE /v1/vaults/{vault}/mcp-oauth/{key}`. Start/delete require vault admin;
 list/probe require member. Dynamic clients and tokens are isolated per vault.
-`registration_unsupported` may include a catalog `provider` that needs an
-OAuth app. A `needs_reconnect` account requires a new human sign-in, not a
+Configured apps are selected by discovered issuer, with explicit `app_id`
+required for ambiguous matches. MCP routing stays resource-scoped even if
+the same app configures direct API hosts. A `needs_reconnect` account requires a new human sign-in, not a
 credential reveal or repeated registration by the container.
 
 In the NanoClaw headless gateway, credential values are write-only.

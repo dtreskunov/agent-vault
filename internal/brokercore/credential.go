@@ -57,6 +57,7 @@ type InjectResult struct {
 	// Passthrough is set when no service matched but the unmatched-host
 	// policy permitted forwarding.
 	Passthrough bool
+	HTTPSOnly   bool
 }
 
 // CredentialProvider resolves a service for (targetHost, targetPath) in
@@ -210,6 +211,7 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	// Capture non-secret metadata up front so a downstream credential-missing
 	// error still carries it for diagnostic logging.
 	result := &InjectResult{
+		HTTPSOnly:      matched.HTTPSOnly,
 		MatchedName:    matched.Name,
 		MatchedHost:    matched.Host,
 		MatchedPath:    matched.Path,

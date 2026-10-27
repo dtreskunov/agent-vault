@@ -10,17 +10,13 @@ import (
 )
 
 func (s *Server) registerOAuthApps(mux *http.ServeMux, wrap func(http.HandlerFunc) http.HandlerFunc) {
-	for _, base := range []string{"/v1/oauth-apps/{provider}", "/v1/vaults/{name}/oauth-apps/{provider}"} {
+	for _, base := range []string{"/v1/oauth-apps/{app_id}", "/v1/vaults/{name}/oauth-apps/{app_id}"} {
 		for _, method := range []string{"GET", "PUT", "DELETE"} {
 			mux.HandleFunc(method+" "+base, wrap(s.handleOAuthApp))
 		}
 	}
-	mux.HandleFunc("GET /v1/oauth/providers", wrap(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := s.requireInstanceMember(w, r); err != nil {
-			return
-		}
-		jsonOK(w, mcpauth.Catalog())
-	}))
+	mux.HandleFunc("GET /v1/oauth-apps", wrap(s.handleOAuthApp))
+	mux.HandleFunc("GET /v1/vaults/{name}/oauth-apps", wrap(s.handleOAuthApp))
 	mux.HandleFunc("POST /v1/vaults/{name}/oauth-accounts/start", wrap(s.handleProviderAccountStart))
 	mux.HandleFunc("GET /v1/vaults/{name}/oauth-accounts", wrap(s.handleProviderAccounts))
 	mux.HandleFunc("DELETE /v1/vaults/{name}/oauth-accounts/{key}", wrap(s.handleProviderAccountDelete))
@@ -43,10 +39,17 @@ func (s *Server) handleOAuthApp(w http.ResponseWriter, r *http.Request) {
 		}
 		vault = v.ID
 	}
-	provider := r.PathValue("provider")
+	appID := r.PathValue("app_id")
 	switch r.Method {
 	case "GET":
-		info, err := s.mcpOAuth.GetApp(r.Context(), vault, provider)
+		if appID == "" {
+			items, err := s.mcpOAuth.ListApps(r.Context(), vault)
+			if !s.mcpError(w, err) {
+				jsonOK(w, map[string]any{"items": items})
+			}
+			return
+		}
+		info, err := s.mcpOAuth.GetApp(r.Context(), vault, appID)
 		if errors.Is(err, sql.ErrNoRows) {
 			jsonError(w, 404, "OAuth app not configured")
 			return
@@ -57,17 +60,19 @@ func (s *Server) handleOAuthApp(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, info)
 	case "PUT":
 		var input mcpauth.AppInput
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
 			jsonError(w, 400, "Invalid request body")
 			return
 		}
-		info, err := s.mcpOAuth.PutApp(r.Context(), vault, provider, input)
+		info, err := s.mcpOAuth.PutApp(r.Context(), vault, appID, input)
 		if s.mcpError(w, err) {
 			return
 		}
 		jsonOK(w, info)
 	case "DELETE":
-		err := s.mcpOAuth.DeleteApp(r.Context(), vault, provider)
+		err := s.mcpOAuth.DeleteApp(r.Context(), vault, appID)
 		if errors.Is(err, sql.ErrNoRows) {
 			jsonError(w, 404, "OAuth app not configured")
 			return
@@ -85,15 +90,17 @@ func (s *Server) handleProviderAccountStart(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input struct {
-		Provider   string   `json:"provider"`
-		ScopeSets  []string `json:"scope_sets"`
+		AppID      string   `json:"app_id"`
+		Scopes     []string `json:"scopes"`
 		ReplaceKey string   `json:"replace_key,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
 		jsonError(w, 400, "Invalid request body")
 		return
 	}
-	start, err := s.mcpOAuth.StartProvider(r.Context(), v.ID, input.Provider, input.ScopeSets, input.ReplaceKey)
+	start, err := s.mcpOAuth.StartAccount(r.Context(), v.ID, input.AppID, input.Scopes, input.ReplaceKey)
 	if s.mcpError(w, err) {
 		return
 	}

@@ -46,6 +46,8 @@ Names beginning `mcp-` or `oauth-` are reserved. Direct PUT/POST/PATCH/DELETE,
 bulk replacement and clearing cannot change/remove generated account
 services (`409`). A bulk PUT must retain generated services unchanged.
 Non-managed services cannot reference managed account credentials.
+Static keys and service edits also return `409` if they would overlap or shadow
+a host-wide HTTPS OAuth-account route, even when using another credential key.
 
 The legacy `POST /v1/credentials` and bulk service APIs remain available,
 but separate credential/service requests are not an atomic transaction.

@@ -10,6 +10,11 @@ Each service contains:
 - **Name**: A canonical per-vault identifier (slug, 3–64 lowercase alphanumeric/hyphen chars, no leading/trailing hyphen, no consecutive hyphens). **Required on write** for new services — pick a deliberate name like `stripe`, `slack-bot`, or `internal-billing`. `name` may be omitted only when `host` + `path` uniquely matches an existing service (the server adopts that service's name, the same pattern as host-based delete). Legacy services persisted without a name before this contract are auto-slugified from `host` + `path` on read so they remain addressable; the slug becomes durable on the next write.
 - **Host**: The single matcher field. Accepts a bare hostname (`api.stripe.com`), a one-level wildcard (`*.github.com`), an inline path-scoped form (`slack.com/api/*`), or a port-scoped form (`internal.corp.com:3000` or `internal.corp.com:3000/api/*`). When a port is included, the service matches only traffic to that port; without a port, the service matches any port. Reads and writes use the same shape: writes accept any of those forms; reads return the joined inline form so you see exactly what you wrote.
 - **Auth config**: How Agent Vault authenticates. Five types are supported: `bearer`, `basic`, `api-key`, `custom`, and `passthrough` (opt out of injection).
+- **HTTPS only**: `https_only:true` rejects plaintext forwarding. Generated
+  [API-account routes](/guides/oauth-apps) set this flag, use exact hosts/ports
+  without path restrictions, and cannot overlap other services in that vault.
+  MCP-generated routes retain their resource paths. Manage generated routes
+  through the account lifecycle, not direct service edits.
 
 <Tip>
   The `/discover` endpoint returns each service's `name` and `host` (joined

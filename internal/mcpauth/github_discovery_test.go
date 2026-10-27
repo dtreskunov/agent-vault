@@ -34,7 +34,7 @@ func TestGitHubTrailingSlashProbe(t *testing.T) {
 	m, _, vault := testManager(t)
 	m.client.Transport = githubMetadataTransport{}
 	probe, err := m.Probe(context.Background(), vault, "https://api.githubcopilot.com/mcp/")
-	if err != nil || !probe.OAuth || probe.Code != "registration_unsupported" || probe.Provider != "github" {
+	if err != nil || !probe.OAuth || probe.Code != "registration_unsupported" || probe.Issuer != "https://github.com/login/oauth" {
 		t.Fatalf("GitHub metadata not accepted: %v", err)
 	}
 	if err := m.StoreApp(context.Background(), "", Client{Issuer: "https://github.com/login/oauth", ID: "test-github", Secret: "synthetic"}); err != nil {

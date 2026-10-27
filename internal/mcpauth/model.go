@@ -16,9 +16,8 @@ import (
 )
 
 type Failure struct {
-	Code     string `json:"code"`
-	Message  string `json:"error"`
-	Provider string `json:"provider,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"error"`
 }
 
 func (f *Failure) Error() string { return f.Message }
@@ -34,6 +33,8 @@ type Core interface {
 }
 
 type Client struct {
+	AppID           string
+	Config          AppConfig
 	UpdatedAt       time.Time
 	Issuer          string
 	ID              string
@@ -50,24 +51,30 @@ type Client struct {
 }
 
 type Account struct {
-	Identity     *string
-	Subject      string
-	Provider     string
-	ScopeSets    []string
-	Key          string
-	ResourceURL  string
-	Resource     string
-	Issuer       string
-	Metadata     oauthex.AuthServerMeta
-	Client       Client
-	Scopes       string
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
-	ConnectedAt  *time.Time
-	LastUsedAt   *time.Time
-	UpdatedAt    time.Time
-	Reconnect    bool
+	AppID           string
+	APIHosts        []string
+	IdentityAdapter string
+	RequestedScopes []string
+	GrantedScopes   []string
+	ScopeSource     string
+	Identity        *string
+	Subject         string
+	Provider        string
+	ScopeSets       []string
+	Key             string
+	ResourceURL     string
+	Resource        string
+	Issuer          string
+	Metadata        oauthex.AuthServerMeta
+	Client          Client
+	Scopes          string
+	AccessToken     string
+	RefreshToken    string
+	ExpiresAt       time.Time
+	ConnectedAt     *time.Time
+	LastUsedAt      *time.Time
+	UpdatedAt       time.Time
+	Reconnect       bool
 }
 
 type Flow struct {
@@ -81,18 +88,23 @@ type Flow struct {
 }
 
 type AccountInfo struct {
-	Kind        string     `json:"kind"`
-	Provider    string     `json:"provider,omitempty"`
-	ScopeSets   []string   `json:"scope_sets,omitempty"`
-	Key         string     `json:"key"`
-	ResourceURL string     `json:"resource_url"`
-	Account     *string    `json:"account"`
-	ConnectedAt *time.Time `json:"connected_at"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	Status      string     `json:"status"`
-	Client      string     `json:"client"`
-	Scopes      []string   `json:"scopes"`
+	Kind            string     `json:"kind"`
+	AppID           string     `json:"app_id,omitempty"`
+	AppSource       string     `json:"app_source,omitempty"`
+	Issuer          string     `json:"issuer"`
+	APIHosts        []string   `json:"api_hosts"`
+	RequestedScopes []string   `json:"requested_scopes"`
+	GrantedScopes   []string   `json:"granted_scopes"`
+	ScopeSource     string     `json:"scope_source"`
+	Key             string     `json:"key"`
+	ResourceURL     string     `json:"resource_url"`
+	Account         *string    `json:"account"`
+	ConnectedAt     *time.Time `json:"connected_at"`
+	LastUsedAt      *time.Time `json:"last_used_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	Status          string     `json:"status"`
+	Client          string     `json:"client"`
+	Scopes          []string   `json:"scopes"`
 }
 
 func (a Account) Info() AccountInfo {
@@ -100,13 +112,10 @@ func (a Account) Info() AccountInfo {
 	if a.Reconnect || a.AccessToken == "" {
 		status = "needs_reconnect"
 	}
-	id := a.Provider
-	if id == "" {
-		id = provider(a.Issuer)
-	}
 	return AccountInfo{Key: a.Key, ResourceURL: a.ResourceURL, ConnectedAt: a.ConnectedAt,
 		Account: a.Identity,
-		Kind:    accountType(a), Provider: id, ScopeSets: a.ScopeSets,
+		Kind:    accountType(a), AppID: a.Client.AppID, AppSource: a.Client.Source, Issuer: a.Issuer,
+		APIHosts: unique(a.APIHosts), RequestedScopes: unique(a.RequestedScopes), GrantedScopes: a.GrantedScopes, ScopeSource: a.ScopeSource,
 		LastUsedAt: a.LastUsedAt, UpdatedAt: a.UpdatedAt, Status: status, Client: a.Client.Kind,
 		Scopes: strings.Fields(a.Scopes)}
 }
@@ -118,19 +127,8 @@ func digest(value string) string {
 
 func accountKey(resource string) string { return "MCP_" + strings.ToUpper(digest(resource)[:24]) }
 
-func provider(issuer string) string {
-	switch strings.TrimSuffix(issuer, "/") {
-	case "https://github.com/login/oauth":
-		return "github"
-	case "https://accounts.google.com":
-		return "google"
-	default:
-		return ""
-	}
-}
-
 func unsupported(issuer string) error {
-	return &Failure{Code: "registration_unsupported", Provider: provider(issuer),
+	return &Failure{Code: "registration_unsupported",
 		Message: fmt.Sprintf("Authorization server %s supports neither usable registration nor a configured app or client metadata", issuer)}
 }
 

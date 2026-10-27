@@ -24,8 +24,8 @@ import (
 	"github.com/Infisical/agent-vault/internal/gatewayconfig"
 	"github.com/Infisical/agent-vault/internal/headless"
 	"github.com/Infisical/agent-vault/internal/infisical"
-	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/mcpauth"
+	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/notify"
 	"github.com/Infisical/agent-vault/internal/oauth"
@@ -33,8 +33,8 @@ import (
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
 	"github.com/Infisical/agent-vault/internal/socketsessions"
-	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/Infisical/agent-vault/internal/statickeys"
+	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/Infisical/agent-vault/internal/telemetry"
 )
 
@@ -61,22 +61,24 @@ type agentVaultJSON struct {
 
 // Server is the Agent Vault HTTP server.
 type Server struct {
-	staticKeys *statickeys.Repository
-	mcpOAuth *mcpauth.Manager
-	mux *http.ServeMux
-	socketSessions *socketsessions.Manager
-	httpServer  *http.Server
-	store       Store
-	encKey      []byte // 32-byte encryption key, held in memory while running
-	notifier    *notify.Notifier
-	initialized    bool                // true when at least one owner account exists
-	lastInitCheck  atomic.Int64        // unix-millis of last DB check for initialization (throttle)
-	baseURL     string              // externally-reachable base URL (e.g. "https://sb.example.com")
-	skillCLI    []byte              // embedded CLI skill content (served at GET /v1/skills/cli)
-	mitm        *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
-	logger      *slog.Logger        // structured logger for per-request observability
-	rateLimit   *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
-	logSink     requestlog.Sink     // per-request persistence sink; never nil (Nop default)
+	staticKeys      *statickeys.Repository
+	mcpOAuth        *mcpauth.Manager
+	oauthPrepare    sync.Once
+	oauthPrepareErr error
+	mux             *http.ServeMux
+	socketSessions  *socketsessions.Manager
+	httpServer      *http.Server
+	store           Store
+	encKey          []byte // 32-byte encryption key, held in memory while running
+	notifier        *notify.Notifier
+	initialized     bool                // true when at least one owner account exists
+	lastInitCheck   atomic.Int64        // unix-millis of last DB check for initialization (throttle)
+	baseURL         string              // externally-reachable base URL (e.g. "https://sb.example.com")
+	skillCLI        []byte              // embedded CLI skill content (served at GET /v1/skills/cli)
+	mitm            *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
+	logger          *slog.Logger        // structured logger for per-request observability
+	rateLimit       *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
+	logSink         requestlog.Sink     // per-request persistence sink; never nil (Nop default)
 	// touchCache short-circuits per-request session-touch writes. With
 	// db.SetMaxOpenConns(1), every UPDATE — even a no-op — opens the
 	// single WAL writer slot. Caching the last-touch wall-clock per
@@ -113,6 +115,9 @@ func (s *Server) RateLimit() *ratelimit.Registry { return s.rateLimit }
 func (s *Server) AttachMITM(p *mitm.Proxy) { s.mitm = p }
 
 func (s *Server) AttachSocketSessions(root string) error {
+	if err := s.PrepareGateway(context.Background()); err != nil {
+		return err
+	}
 	if s.mitm == nil {
 		return fmt.Errorf("socket sessions require an enabled MITM proxy and CA")
 	}
@@ -204,7 +209,7 @@ func (s *Server) SessionResolver() brokercore.SessionResolver {
 // this server's store and encryption key.
 func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 	p := &brokercore.StoreCredentialProvider{
-		Store:      gatewayCredentialStore{credentialStoreAdapter{s.store}, s.mcpOAuth,s.staticKeys},
+		Store:      gatewayCredentialStore{credentialStoreAdapter{s.store}, s.mcpOAuth, s.staticKeys},
 		OAuthStore: credentialStoreAdapter{s.store},
 		EncKey:     s.encKey,
 		Refresher:  s.oauthRefresher,
@@ -1087,6 +1092,9 @@ func (s *Server) requireInitialized(next http.HandlerFunc) http.HandlerFunc {
 // Start starts the server and blocks until shutdown.
 // It listens for SIGINT/SIGTERM to shut down gracefully.
 func (s *Server) Start() error {
+	if err := s.PrepareGateway(context.Background()); err != nil {
+		return err
+	}
 	if s.socketSessions != nil {
 		defer func() {
 			if err := s.socketSessions.Close(); err != nil {

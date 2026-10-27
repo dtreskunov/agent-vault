@@ -33,6 +33,7 @@ type Service struct {
 	Path          string         `yaml:"path,omitempty" json:"path,omitempty"`
 	Port          *int           `yaml:"port,omitempty" json:"-"`
 	Enabled       *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	HTTPSOnly     bool           `yaml:"https_only,omitempty" json:"https_only,omitempty"`
 	Auth          Auth           `yaml:"auth" json:"auth"`
 	Substitutions []Substitution `yaml:"substitutions,omitempty" json:"substitutions,omitempty"`
 }
@@ -378,6 +379,32 @@ func Validate(cfg *Config) error {
 		}
 		if err := s.ValidateSubstitutions(); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
+		}
+	}
+	return ValidateExclusiveHosts(cfg.Services)
+}
+
+// HostsOverlap ignores paths and treats an unspecified port as any port.
+func HostsOverlap(a, b Service) bool {
+	if a.Port != nil && b.Port != nil && *a.Port != *b.Port {
+		return false
+	}
+	ah, bh := strings.ToLower(a.Host), strings.ToLower(b.Host)
+	_, ab := matchHostPattern(ah, bh)
+	_, ba := matchHostPattern(bh, ah)
+	return ab || ba
+}
+
+// Host-wide HTTPS routes cannot be shadowed by a more specific service.
+func ValidateExclusiveHosts(services []Service) error {
+	for i, service := range services {
+		if !service.HTTPSOnly || service.Path != "" {
+			continue
+		}
+		for j, other := range services {
+			if i != j && HostsOverlap(service, other) {
+				return fmt.Errorf("service %q conflicts with host-wide HTTPS credential route %q", other.Name, service.Name)
+			}
 		}
 	}
 	return nil

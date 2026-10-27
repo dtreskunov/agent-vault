@@ -109,6 +109,7 @@ export interface WireService {
   /** Host pattern (joined inline form: `slack.com/api/*`). Single matcher field on the wire. */
   host: string;
   enabled?: boolean;
+  https_only?: boolean;
   auth: WireServiceAuth;
   substitutions?: WireSubstitution[];
 }

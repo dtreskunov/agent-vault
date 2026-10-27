@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,21 +18,61 @@ import (
 const RefreshPlaceholderPrefix = "av-refresh:"
 const AccessPlaceholderPrefix = "av-access:"
 
-func tokenProvider(host string, port int, path string) string {
-	if port != 443 {
-		return ""
-	}
-	for _, p := range Catalog() {
-		u, err := url.Parse(p.TokenEndpoint)
-		if err == nil && strings.EqualFold(host, u.Hostname()) && (path == "" || path == u.Path) {
-			return p.ID
-		}
-	}
-	return ""
+func tokenAuthority(host string, port int) string {
+	return net.JoinHostPort(strings.ToLower(host), strconv.Itoa(port))
 }
 
-// InterceptTokenHost ensures stubs are handled before they could leave the gateway.
-func InterceptTokenHost(host string, port int) bool { return tokenProvider(host, port, "") != "" }
+func endpointAuthority(raw string) (string, error) {
+	if err := validateURL(raw); err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(raw)
+	port := 443
+	if u.Scheme == "http" {
+		port = 80
+	}
+	if u.Port() != "" {
+		var err error
+		port, err = strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return "", failure("invalid_app", "Invalid token endpoint port")
+		}
+	}
+	return tokenAuthority(u.Hostname(), port), nil
+}
+
+func (r *Repository) rememberTokenAuthority(ctx context.Context, exec executor, endpoint string) error {
+	if endpoint == "" {
+		return nil
+	}
+	authority, err := endpointAuthority(endpoint)
+	if err != nil {
+		return err
+	}
+	_, err = exec.ExecContext(ctx, r.dialect.Rebind(
+		`INSERT INTO gateway_oauth_token_authorities (authority) VALUES (?) ON CONFLICT(authority) DO NOTHING`), authority)
+	return err
+}
+
+// Interception is instance-wide and survives account and app deletion.
+func (m *Manager) InterceptTokenHost(ctx context.Context, host string, port int) (bool, error) {
+	var authority string
+	err := m.repo.db.QueryRowContext(ctx, m.repo.dialect.Rebind(
+		`SELECT authority FROM gateway_oauth_token_authorities WHERE authority=?`), tokenAuthority(host, port)).Scan(&authority)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func sameTokenEndpoint(a, b *url.URL) bool {
+	aa, err := endpointAuthority(a.String())
+	if err != nil {
+		return false
+	}
+	bb, err := endpointAuthority(b.String())
+	return err == nil && a.Scheme == b.Scheme && aa == bb && a.EscapedPath() == b.EscapedPath() && a.RawQuery == b.RawQuery
+}
 
 func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Request) (*http.Response, error) {
 	port := 443
@@ -42,22 +83,37 @@ func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Reque
 			return nil, err
 		}
 	}
-	id := tokenProvider(r.URL.Hostname(), port, r.URL.Path)
-	if id == "" || r.Method != "POST" {
+	intercept, err := m.InterceptTokenHost(ctx, r.URL.Hostname(), port)
+	if err != nil {
+		return nil, err
+	}
+	if !intercept {
+		return nil, nil
+	}
+	if r.Body == nil {
 		return nil, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(r.Body, (64<<10)+1))
 	if err != nil {
 		return nil, err
 	}
-	r.Body.Close()
-	r.Body = io.NopCloser(bytes.NewReader(data))
-	if len(data) > 64<<10 {
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(data), r.Body), r.Body}
+	formEncoded := strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded")
+	if len(data) > 64<<10 && formEncoded {
 		return stubError(413, "invalid_request", "Token request exceeds 64 KiB"), nil
+	}
+	if !formEncoded && !bytes.Contains(data, []byte(RefreshPlaceholderPrefix)) {
+		return nil, nil
 	}
 	form, err := url.ParseQuery(string(data))
 	if err != nil {
-		return stubError(400, "invalid_request", "Malformed token request"), nil
+		if bytes.Contains(data, []byte(RefreshPlaceholderPrefix)) {
+			return stubError(400, "invalid_request", "Malformed token request"), nil
+		}
+		return nil, nil
 	}
 	refresh := form.Get("refresh_token")
 	if !strings.HasPrefix(refresh, RefreshPlaceholderPrefix) {
@@ -66,7 +122,7 @@ func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Reque
 		}
 		return nil, nil
 	}
-	if r.URL.Scheme != "https" || form.Get("grant_type") != "refresh_token" || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+	if r.URL.Scheme != "https" || r.Method != "POST" || form.Get("grant_type") != "refresh_token" || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
 		return stubError(400, "invalid_request", "Placeholder refreshes require HTTPS and a form-encoded refresh_token grant"), nil
 	}
 	key := strings.TrimPrefix(refresh, RefreshPlaceholderPrefix)
@@ -77,7 +133,11 @@ func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Reque
 	if err != nil {
 		return nil, err
 	}
-	if account.Provider != id || account.Reconnect || account.AccessToken == "" {
+	endpoint, err := url.Parse(account.Metadata.TokenEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	if !sameTokenEndpoint(endpoint, r.URL) || account.Reconnect || account.AccessToken == "" {
 		return stubError(400, "invalid_grant", "OAuth account requires sign-in"), nil
 	}
 	// Real refresh is deferred to API-token injection, never this synthetic endpoint.

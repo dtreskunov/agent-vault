@@ -5,29 +5,32 @@ description: "Synthetic refresh responses without exposing account credentials."
 
 F8 lets a stdio MCP client use normal OAuth refresh logic while the gateway
 keeps the real provider tokens. Configure the client with the connected
-provider-account key returned by [OAuth account sign-in](/guides/oauth-apps):
+API-account key returned by [OAuth account sign-in](/guides/oauth-apps):
 
 | Client field | Placeholder |
 | --- | --- |
 | Refresh token | `av-refresh:<account key>` |
 | Access token | `av-access:<account key>` |
 
-This account-specific placeholder convention is the proposed NanoClaw
+This account-specific placeholder convention is the NanoClaw
 integration contract; the host must put these values, not real tokens, in the
 stdio client's configuration. Neither placeholder is a gateway bearer token.
 Mount only the group's scoped proxy socket as usual.
 
-The gateway intercepts catalog token hosts (`oauth2.googleapis.com` and
-GitHub's token host) on CONNECT port 443 so placeholders cannot take a blind
-tunnel. This is an intentional exception to unmatched-host tunnelling.
-Clients must trust the gateway CA. Non-token hosts retain normal policy.
+The gateway records token authorities from configured apps and pinned account
+metadata in a persistent, instance-wide interception registry. Known authorities
+force MITM on CONNECT regardless of the caller's vault, even after disconnect
+or app deletion. This intentionally overrides unmatched-host tunnelling.
+Clients must trust the gateway CA. Unknown authorities retain normal policy:
+the gateway cannot inspect arbitrary blindly tunnelled hosts.
 
-A form-encoded HTTPS POST to the catalog token path with
+A form-encoded HTTPS POST to the account's exact pinned token endpoint with
 `grant_type=refresh_token&refresh_token=av-refresh:<key>` returns synthetic
 access/refresh tokens and an expiry. The account must be connected in the
-socket's vault and belong to that provider. Unknown, cross-vault,
-disconnected or wrong-provider placeholders return OAuth `400 invalid_grant`;
-they are never forwarded upstream.
+socket's vault and match that endpoint. Unknown, cross-vault, disconnected or
+wrong-endpoint placeholders return OAuth `400 invalid_grant`; wrong methods or
+malformed grants return `400 invalid_request`. Near-miss paths on known token
+authorities do not acquire a valid synthetic refresh response.
 
 The synthetic endpoint does **not** contact the provider, even to refresh.
 Actual token refresh happens only when a subsequent API call resolves the
@@ -38,4 +41,4 @@ synthetic response. Token requests are limited to 64 KiB, responses are
 Ordinary refresh requests without the placeholder prefix retain their
 original body and follow existing proxy/service policy. Stub tokens do not
 grant access to a destination not covered by that account's generated
-services.
+host routes. MCP authorizations retain their separate resource-scoped routing.

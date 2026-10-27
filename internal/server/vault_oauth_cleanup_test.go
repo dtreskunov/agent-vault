@@ -56,7 +56,7 @@ func TestVaultDeletionCleansProviderAccountsAndOverridesOnly(t *testing.T) {
 	s := New("127.0.0.1:0", db, key, notify.New(nil), true, "http://127.0.0.1:12345", slog.New(slog.DiscardHandler))
 	secret := "synthetic"
 	for _, vault := range []string{"", removed.ID, kept.ID} {
-		if _, err := s.mcpOAuth.PutApp(ctx, vault, "google", mcpauth.AppInput{ClientID: "client-" + vault, ClientSecret: &secret}); err != nil {
+		if _, err := s.mcpOAuth.PutApp(ctx, vault, "google", mcpauth.AppInput{Issuer: new("https://accounts.google.com"), ClientID: "client-" + vault, ClientSecret: &secret}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +69,7 @@ func TestVaultDeletionCleansProviderAccountsAndOverridesOnly(t *testing.T) {
 				Client:   mcpauth.Client{Kind: "app", ID: "client-" + v.ID, Secret: secret, Source: "vault"}}
 			kind := "mcp_oauth"
 			if strings.HasPrefix(name, "OAUTH_") {
-				account.Provider = "google"
+				account.AppID = "google"
 				kind = "oauth_app"
 			}
 			data, err := json.Marshal(account)

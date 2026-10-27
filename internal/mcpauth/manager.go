@@ -40,7 +40,7 @@ func (m *Manager) Start(ctx context.Context, vault, resource string) (*Started, 
 
 // StartNamed is Start with the client_name to register under, e.g. the agent
 // group's display name. Empty keeps the existing registration's name.
-func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName string) (*Started, error) {
+func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName string, appID ...string) (*Started, error) {
 	discovery, err := m.discover(ctx, resource)
 	if err != nil {
 		return nil, err
@@ -78,11 +78,12 @@ func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName st
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	client, err := m.chooseClient(ctx, vault, discovery, true, clientName)
+	client, err := m.chooseClient(ctx, vault, discovery, true, clientName, appID...)
 	if err != nil {
 		return nil, err
 	}
 	account.Client = *client
+	account.RequestedScopes, account.ScopeSource = strings.Fields(account.Scopes), "requested"
 	if _, err := m.repo.db.ExecContext(ctx, `DELETE FROM gateway_oauth_records WHERE kind='state' AND expires_at>0 AND expires_at<`+
 		m.repo.dialect.Rebind("?"), m.now().Unix()); err != nil {
 		return nil, err
@@ -160,7 +161,7 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, failure("invalid_token_response", "MCP OAuth token endpoint returned an unusable token")
 	}
 	a.AccessToken, a.RefreshToken, a.ExpiresAt = token.AccessToken, token.RefreshToken, token.ExpiresAt
-	if err := grantedScopeSets(a, token.Scope); err != nil {
+	if err := recordScopes(a, token.Scope); err != nil {
 		m.revoke(ctx, a)
 		return nil, err
 	}
@@ -169,7 +170,10 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, err
 	}
 	now := m.now().UTC()
-	a.ConnectedAt, a.UpdatedAt, a.Reconnect = &now, now, false
+	if a.ConnectedAt == nil {
+		a.ConnectedAt = &now
+	}
+	a.UpdatedAt, a.Reconnect = now, false
 	if err := m.repo.saveAccount(ctx, flow.VaultID, a, true); err != nil {
 		m.revoke(ctx, a)
 		return nil, err
@@ -229,7 +233,7 @@ func (m *Manager) List(ctx context.Context, vault string) ([]AccountInfo, error)
 	return items, nil
 }
 
-func (m *Manager) Probe(ctx context.Context, vault, resource string) (*ProbeInfo, error) {
+func (m *Manager) Probe(ctx context.Context, vault, resource string, appID ...string) (*ProbeInfo, error) {
 	discovery, err := m.discover(ctx, resource)
 	if err != nil {
 		return nil, err
@@ -239,15 +243,16 @@ func (m *Manager) Probe(ctx context.Context, vault, resource string) (*ProbeInfo
 		return info, nil
 	}
 	info.Issuer = discovery.Server.Issuer
-	client, err := m.chooseClient(ctx, vault, discovery, false, "")
+	client, err := m.chooseClient(ctx, vault, discovery, false, "", appID...)
 	if err != nil {
 		var unsupported *Failure
 		if errors.As(err, &unsupported) && unsupported.Code == "registration_unsupported" {
-			info.Code, info.Provider = unsupported.Code, unsupported.Provider
+			info.Code = unsupported.Code
 			return info, nil
 		}
 		return nil, err
 	}
 	info.Client = client.Kind
+	info.AppID = client.AppID
 	return info, nil
 }

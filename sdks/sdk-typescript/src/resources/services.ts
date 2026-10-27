@@ -101,6 +101,8 @@ export interface ServiceInput {
   host: string;
   /** Whether the service is active. Omitted/undefined is treated as enabled. */
   enabled?: boolean;
+  /** Reject plaintext forwarding; host-wide HTTPS routes cannot overlap other services. */
+  https_only?: boolean;
   /** Authentication configuration. */
   auth: ServiceAuth;
   /** Optional placeholder→credential substitutions applied before forwarding. */
@@ -123,6 +125,8 @@ export interface Service {
   host: string;
   /** Whether the service is active. Omitted/undefined is treated as enabled. */
   enabled?: boolean;
+  /** Reject plaintext forwarding; set on managed API-account routes. */
+  https_only?: boolean;
   /** Authentication configuration. */
   auth: ServiceAuth;
   /** Optional placeholder→credential substitutions applied before forwarding. */

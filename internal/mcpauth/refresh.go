@@ -62,6 +62,9 @@ func (m *Manager) Credential(ctx context.Context, vault, key string) (*store.Cre
 			if token.RefreshToken != "" {
 				account.RefreshToken = token.RefreshToken
 			}
+			if err := recordScopes(account, token.Scope); err != nil {
+				return nil, err
+			}
 			changed = true
 		}
 	}

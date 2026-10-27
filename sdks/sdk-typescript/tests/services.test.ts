@@ -34,6 +34,7 @@ describe("ServicesResource", () => {
             {
               host: "proxy.example.com",
               enabled: false,
+              https_only: true,
               auth: { type: "passthrough" },
               substitutions: [
                 { key: "ACCOUNT_ID", placeholder: "__ACCOUNT__", in: ["path"] },
@@ -59,6 +60,7 @@ describe("ServicesResource", () => {
       expect(result.services[1]).toEqual({
         host: "proxy.example.com",
         enabled: false,
+        https_only: true,
         auth: { type: "passthrough" },
         substitutions: [
           { key: "ACCOUNT_ID", placeholder: "__ACCOUNT__", in: ["path"] },

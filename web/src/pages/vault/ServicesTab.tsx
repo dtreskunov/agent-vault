@@ -28,6 +28,7 @@ interface Service {
   name: string;
   host: string;
   enabled?: boolean;
+  https_only?: boolean;
   auth: Auth;
   substitutions?: Substitution[];
 }
@@ -649,6 +650,7 @@ function ServiceModal({
         name: name.trim(),
         host: pattern.trim(),
         ...(enabled ? {} : { enabled: false }),
+        ...(initial?.https_only && { https_only: true }),
         auth: buildAuth(),
         ...(cleanedSubs.length > 0 && { substitutions: cleanedSubs }),
       };

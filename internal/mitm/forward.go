@@ -237,9 +237,12 @@ func (p *Proxy) forwardRequest(
 		emit(http.StatusRequestEntityTooLarge, "request_too_large")
 		return
 	}
-	local:=r.Clone(r.Context());local.URL=outURL
-	if p.localResponse(w,local,scope.VaultID,emit){return}
-	r.Body=local.Body
+	local := r.Clone(r.Context())
+	local.URL = outURL
+	if p.localResponse(w, local, scope.VaultID, emit) {
+		return
+	}
+	r.Body = local.Body
 
 	inject, err := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.URL.Path)
 	if inject != nil {
@@ -260,6 +263,12 @@ func (p *Proxy) forwardRequest(
 		}
 		brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
 		emit(status, errCode)
+		return
+	}
+
+	if inject.HTTPSOnly && !useTLSUpstream {
+		http.Error(w, "This credential route requires HTTPS", http.StatusForbidden)
+		emit(http.StatusForbidden, "https_required")
 		return
 	}
 

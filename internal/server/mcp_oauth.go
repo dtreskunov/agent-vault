@@ -66,6 +66,7 @@ func (s *Server) handleMCPOAuthStart(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		ResourceURL string `json:"resource_url"`
 		ClientName  string `json:"client_name"`
+		AppID       string `json:"app_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid request body")
@@ -76,7 +77,7 @@ func (s *Server) handleMCPOAuthStart(w http.ResponseWriter, r *http.Request) {
 		jsonCodedError(w, http.StatusBadRequest, "invalid_client_name", "client_name must be 1-100 printable characters")
 		return
 	}
-	started, err := s.mcpOAuth.StartNamed(r.Context(), vault.ID, input.ResourceURL, name)
+	started, err := s.mcpOAuth.StartNamed(r.Context(), vault.ID, input.ResourceURL, name, input.AppID)
 	if s.mcpError(w, err) {
 		return
 	}
@@ -90,12 +91,13 @@ func (s *Server) handleMCPOAuthProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		ResourceURL string `json:"resource_url"`
+		AppID       string `json:"app_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	probe, err := s.mcpOAuth.Probe(r.Context(), vault.ID, input.ResourceURL)
+	probe, err := s.mcpOAuth.Probe(r.Context(), vault.ID, input.ResourceURL, input.AppID)
 	if s.mcpError(w, err) {
 		return
 	}
@@ -143,7 +145,7 @@ func (s *Server) mcpError(w http.ResponseWriter, err error) bool {
 	var failure *mcpauth.Failure
 	if errors.As(err, &failure) {
 		status := http.StatusBadRequest
-		if failure.Code == "service_conflict" || failure.Code == "credential_conflict" {
+		if failure.Code == "service_conflict" || failure.Code == "credential_conflict" || failure.Code == "ambiguous_app" {
 			status = http.StatusConflict
 		}
 		jsonStatus(w, status, failure)

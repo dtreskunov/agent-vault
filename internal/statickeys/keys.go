@@ -80,6 +80,9 @@ func (r *Repository) services(ctx context.Context, tx *sql.Tx, vault string) ([]
 }
 
 func (r *Repository) saveServices(ctx context.Context, tx *sql.Tx, vault string, services []broker.Service) error {
+	if err := broker.ValidateExclusiveHosts(services); err != nil {
+		return fmt.Errorf("%w: %v", ErrConflict, err)
+	}
 	if err := broker.Validate(&broker.Config{Vault: vault, Services: services}); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}

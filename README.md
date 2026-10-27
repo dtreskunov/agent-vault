@@ -70,8 +70,14 @@ NanoClaw can host OAuth callbacks while the gateway stays private; configure
 `AGENT_VAULT_OAUTH_REDIRECT_URL` and relay completion over the authenticated API.
 [MCP OAuth](docs/guides/mcp-oauth.mdx) adds per-vault dynamic registration,
 PKCE/resource-bound tokens, refresh and automatic socket-proxy injection.
-[OAuth apps](docs/guides/oauth-apps.mdx) support install-wide configuration,
-vault overrides and provider-account sign-in for Google and GitHub.
+[OAuth apps](docs/guides/oauth-apps.mdx) support generic install-wide clients,
+vault overrides and vault-local API accounts. Exact HTTPS API-host routing
+selects the credential; providers enforce OAuth permissions, not a gateway
+scope/path catalog. Existing provider accounts migrate atomically before
+listeners start, preserving keys and tokens. This intentionally expands old
+path-scoped rules to whole hosts; conflicts stop startup. Upgrade NanoClaw and
+Agent Vault together after a state backup; rollback requires the matching
+pre-upgrade state and binaries, not a binary-only downgrade.
 [Static key APIs](docs/guides/static-keys.mdx) support atomic key/destination
 updates, safe per-service edits and coalesced usage timestamps.
 [OAuth token stubs](docs/guides/oauth-token-stubs.mdx) keep real provider
