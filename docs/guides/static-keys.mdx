@@ -34,6 +34,47 @@ Success returns `200 {key}`. `DELETE /v1/vaults/{vault}/keys/{KEY}` atomically
 removes the static credential and its services (`204`; missing key `404`).
 OAuth accounts must be edited through their own lifecycle APIs.
 
+## Conditional multi-key sets
+
+Use `/v1/vaults/{vault}/key-sets/{service-name}` for create-only imports and
+services with several **distinct** credentials. This is separate from the
+single-key upsert API above.
+
+- `GET` requires vault membership and returns `{service, keys, revision}` plus
+  the same opaque, quoted revision in `ETag`. Values, ciphertext and nonces
+  are never returned. Responses use `Cache-Control: no-store`.
+- `PUT` with `If-None-Match: *` creates only. Supply
+  `{"service": {...}, "values": {"FIRST_KEY": "...", "SECOND_KEY": "..."}}`.
+  Every referenced key must be new and have a nonempty value.
+- `PUT` with one exact `If-Match: <revision>` edits an existing set. The
+  service name and referenced key membership cannot change. Omit `values`
+  or pass `{}` to preserve all values, or supply only the keys to rotate.
+- `DELETE` with the exact `If-Match` removes the service and **all** its
+  exclusive static keys in one transaction.
+
+For example, `auth.type: "custom"` can use
+`Authorization: "Bearer {{ FIRST_KEY }}"` and
+`x-api-key: "{{ SECOND_KEY }}"` together. The keys remain separate; this
+does not assume their values are identical. Put actual values only in `values`,
+never routing metadata.
+
+Missing/malformed/ambiguous conditions return `428`; an existing create target
+or stale revision returns `412`. Refresh and review the metadata before retrying,
+never switch to an upsert. Rotating a value or changing routing through another
+API invalidates the revision; usage timestamps alone do not.
+
+The vault mutation lock and SQL transaction cover conditional checks,
+credential changes and service storage together. Creation rejects existing
+keys or names. Any key referenced by another service, managed OAuth/MCP
+namespace, or overlapping recipient is rejected rather than shadowed.
+Recipient checks are intentionally conservative even for differing paths.
+Only the built-in credential store is supported.
+
+Sets support 1–64 keys. Values must be nonempty, at most 16 KiB, and contain
+no CR, LF or NUL. New and edited sets enforce HTTPS-only injection.
+Private-network dialing permission does not waive TLS requirements; validate
+the actual client workload before activation.
+
 ## Per-service edits
 
 `PUT /v1/vaults/{vault}/services/{name}` accepts a single service object;

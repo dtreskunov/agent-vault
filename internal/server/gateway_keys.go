@@ -22,6 +22,9 @@ func (s *Server) registerKeyRoutes(mux *http.ServeMux, wrap func(http.HandlerFun
 	mux.HandleFunc("PUT /v1/vaults/{name}/keys/{key}", wrap(s.handleAtomicKey))
 	mux.HandleFunc("DELETE /v1/vaults/{name}/keys/{key}", wrap(s.handleAtomicKey))
 	mux.HandleFunc("PUT /v1/vaults/{name}/services/{host}", wrap(s.handleSingleServicePut))
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		mux.HandleFunc(method+" /v1/vaults/{name}/key-sets/{set}", wrap(s.handleAtomicKeySet))
+	}
 }
 
 func (s *Server) handleAtomicKey(w http.ResponseWriter, r *http.Request) {

@@ -90,8 +90,11 @@ func (r *Repository) saveServices(ctx context.Context, tx *sql.Tx, vault string,
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, r.dialect.Rebind(`UPDATE broker_configs SET services_json=?,updated_at=? WHERE vault_id=?`),
-		string(data), r.dialect.FormatTime(time.Now()), vault)
+	now := r.dialect.FormatTime(time.Now())
+	_, err = tx.ExecContext(ctx, r.dialect.Rebind(`INSERT INTO broker_configs
+		(id,vault_id,services_json,created_at,updated_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(vault_id) DO UPDATE SET services_json=excluded.services_json,updated_at=excluded.updated_at`),
+		rand.Text(), vault, string(data), now, now)
 	return err
 }
 
