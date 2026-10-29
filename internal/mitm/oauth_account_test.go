@@ -90,7 +90,7 @@ func TestOAuthAccountIdentityThroughScopedProxy(t *testing.T) {
 	manager := mcpauth.New(db, mcpauth.NewRepository(sqlDB, dialect, key), oauthrelay.Config{
 		RedirectURI: "https://ui.example/oauth/callback",
 	}, slog.New(slog.DiscardHandler))
-	if err := manager.Migrate(ctx); err != nil {
+	if err := manager.ValidateModel(ctx, false); err != nil {
 		t.Fatal(err)
 	}
 	issuer, authorize, tokenEndpoint := authority.URL, authority.URL+"/authorize", authority.URL+"/token"

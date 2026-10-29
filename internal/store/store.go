@@ -16,10 +16,12 @@ const DefaultVault = "default"
 
 // Vault represents a logical grouping of credentials.
 type Vault struct {
-	ID        string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID          string
+	Name        string
+	Purpose     string
+	OwnerUserID string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // VaultGrant represents an actor's (user or agent) access to a vault with a specific role.
@@ -187,17 +189,21 @@ type CreateScopedSessionParams struct {
 
 // User represents a human user account.
 type User struct {
-	ID           string
-	Email        string
-	PasswordHash []byte
-	PasswordSalt []byte
-	KDFTime      uint32 // Argon2id time parameter used when password was hashed
-	KDFMemory    uint32 // Argon2id memory parameter (KiB) used when password was hashed
-	KDFThreads   uint8  // Argon2id threads parameter used when password was hashed
-	Role         string // "owner", "member", or "no-access"
-	IsActive     bool   // false until email is verified (first user is auto-active)
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             string
+	AuthMode       string
+	InstallationID string
+	Subject        string
+	DisplayName    string
+	Email          string
+	PasswordHash   []byte
+	PasswordSalt   []byte
+	KDFTime        uint32 // Argon2id time parameter used when password was hashed
+	KDFMemory      uint32 // Argon2id memory parameter (KiB) used when password was hashed
+	KDFThreads     uint8  // Argon2id threads parameter used when password was hashed
+	Role           string // "owner", "member", or "no-access"
+	IsActive       bool   // false until email is verified (first user is auto-active)
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // BrokerConfig holds the brokering services for a vault.

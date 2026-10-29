@@ -30,6 +30,10 @@ func (m *Manager) FilterChallenge(ctx context.Context, vault string, keys []stri
 	if !managed {
 		return nil
 	}
+	return m.FilterManagedChallenge(headers)
+}
+
+func (m *Manager) FilterManagedChallenge(headers http.Header) error {
 	challenges, err := oauthex.ParseWWWAuthenticate(headers.Values("WWW-Authenticate"))
 	if err != nil {
 		headers.Del("WWW-Authenticate")

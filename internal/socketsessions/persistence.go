@@ -130,6 +130,9 @@ func (m *Manager) restore() error {
 		if vault == nil {
 			return fmt.Errorf("persisted socket vault is missing")
 		}
+		if vault.Purpose == "library" {
+			return fmt.Errorf("personal libraries cannot restore group socket bindings")
+		}
 		agent, err := m.store.GetAgentByID(ctx, saved.Owner)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("loading persisted socket owner: %w", err)

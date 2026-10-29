@@ -33,6 +33,7 @@ type Core interface {
 }
 
 type Client struct {
+	ConnectionID    string
 	AppID           string
 	Config          AppConfig
 	UpdatedAt       time.Time
@@ -51,6 +52,7 @@ type Client struct {
 }
 
 type Account struct {
+	ConnectionID    string
 	AppID           string
 	APIHosts        []string
 	IdentityAdapter string
@@ -59,8 +61,6 @@ type Account struct {
 	ScopeSource     string
 	Identity        *string
 	Subject         string
-	Provider        string
-	ScopeSets       []string
 	Key             string
 	ResourceURL     string
 	Resource        string
@@ -78,13 +78,16 @@ type Account struct {
 }
 
 type Flow struct {
-	Nonce           string
-	ExplicitReplace bool
-	VaultID         string
-	Account         Account
-	Verifier        string
-	RedirectURI     string
-	ExpiresAt       time.Time
+	ManagedUserID      string
+	ConnectionID       string
+	ConnectionRevision string
+	Nonce              string
+	ExplicitReplace    bool
+	VaultID            string
+	Account            Account
+	Verifier           string
+	RedirectURI        string
+	ExpiresAt          time.Time
 }
 
 type AccountInfo struct {

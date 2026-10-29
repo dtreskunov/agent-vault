@@ -186,6 +186,10 @@ func (m *Manager) create(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Unknown vault")
 		return
 	}
+	if vault.Purpose == "library" {
+		fail(w, 403, "Personal libraries cannot bind group socket sessions")
+		return
+	}
 	if !m.authorize(w, r, actor, vault.ID) {
 		return
 	}
@@ -288,6 +292,27 @@ func (m *Manager) remove(e *entry) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return errors.Join(m.store.DeleteSession(ctx, e.token), stopEntry(ctx, e))
+}
+
+// RevokeVault removes persisted socket capabilities after native group deletion.
+// It never touches connection libraries or upstream OAuth state.
+func (m *Manager) RevokeVault(ctx context.Context, vault string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var failures []error
+	for id, e := range m.items {
+		if e.vaultID != vault {
+			continue
+		}
+		if err := m.remove(e); err != nil {
+			failures = append(failures, err)
+		}
+		delete(m.items, id)
+	}
+	if err := m.persist(ctx); err != nil {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }
 
 func (m *Manager) Close() error {

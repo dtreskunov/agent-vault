@@ -75,6 +75,14 @@ func sameTokenEndpoint(a, b *url.URL) bool {
 }
 
 func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Request) (*http.Response, error) {
+	return m.tokenResponse(ctx, r, func(key string) (*Account, error) { return m.repo.Account(ctx, vault, key) }, false)
+}
+
+func (m *Manager) BindingTokenResponse(ctx context.Context, r *http.Request, resolve func(string) (*Account, error)) (*http.Response, error) {
+	return m.tokenResponse(ctx, r, resolve, true)
+}
+
+func (m *Manager) tokenResponse(ctx context.Context, r *http.Request, resolve func(string) (*Account, error), strict bool) (*http.Response, error) {
 	port := 443
 	if r.URL.Port() != "" {
 		var err error
@@ -87,7 +95,7 @@ func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Reque
 	if err != nil {
 		return nil, err
 	}
-	if !intercept {
+	if !intercept && (!strict || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded")) {
 		return nil, nil
 	}
 	if r.Body == nil {
@@ -102,7 +110,7 @@ func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Reque
 		io.Closer
 	}{io.MultiReader(bytes.NewReader(data), r.Body), r.Body}
 	formEncoded := strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded")
-	if len(data) > 64<<10 && formEncoded {
+	if len(data) > 64<<10 && formEncoded && (intercept || bytes.Contains(data, []byte(RefreshPlaceholderPrefix))) {
 		return stubError(413, "invalid_request", "Token request exceeds 64 KiB"), nil
 	}
 	if !formEncoded && !bytes.Contains(data, []byte(RefreshPlaceholderPrefix)) {
@@ -126,12 +134,12 @@ func (m *Manager) TokenResponse(ctx context.Context, vault string, r *http.Reque
 		return stubError(400, "invalid_request", "Placeholder refreshes require HTTPS and a form-encoded refresh_token grant"), nil
 	}
 	key := strings.TrimPrefix(refresh, RefreshPlaceholderPrefix)
-	account, err := m.repo.Account(ctx, vault, key)
+	account, err := resolve(key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return stubError(400, "invalid_grant", "Placeholder account is not available in this vault"), nil
 	}
 	if err != nil {
-		return nil, err
+		return stubError(400, "invalid_grant", "Unknown, revoked or suspended group binding"), nil
 	}
 	endpoint, err := url.Parse(account.Metadata.TokenEndpoint)
 	if err != nil {

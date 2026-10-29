@@ -1,163 +1,81 @@
 ---
-title: "MCP OAuth"
-description: "Vault-isolated MCP sign-in through a private credential gateway."
+title: "Shared MCP OAuth connections"
+description: "One resource/client/refresh lifecycle with explicit group bindings."
 ---
 
-## Deployment
+MCP consent belongs to a native managed user's connection, not a receiving
+group. The host first provisions that user and library using
+[managed gateway setup](/guides/nanoclaw-gateway).
 
-Use the [headless gateway configuration](/guides/nanoclaw-gateway), including
-`AGENT_VAULT_REVEAL_DISABLED=true`. Set
-`AGENT_VAULT_OAUTH_REDIRECT_URL=https://your-ui.example/oauth/callback`.
-NanoClaw hosts that browser callback and publishes the document returned by
-`GET /v1/oauth/client-metadata` at its origin's `/oauth/client-metadata.json`.
-Do not deploy a second public gateway listener.
+## Create and authorize
 
-All management calls below use the host agent's bearer token. Starting and
-disconnecting require vault admin access because they change the vault's
-services; listing and probing require vault member access. Proxy-role socket
-sessions cannot manage accounts.
+```http
+POST /v1/managed-users/{user}/connections
+Content-Type: application/json
 
-## API
-
-| Purpose | Request | Response |
-| --- | --- | --- |
-| Probe | `POST /v1/vaults/{vault}/mcp-oauth/probe {resource_url,app_id?}` | `200 {oauth,issuer?,client?,code?,app_id?}` |
-| Start | `POST /v1/vaults/{vault}/mcp-oauth/start {resource_url,client_name?,app_id?}` | `200 {state,authorize_url}` |
-| Complete | `POST /v1/oauth/complete {state,code,iss?}` | `200 {status,vault,key?,account?,code?,error?}` |
-| List | `GET /v1/vaults/{vault}/mcp-oauth` | `200 [{key,resource_url,account,connected_at,last_used_at,updated_at,status,client,scopes}]` |
-| Disconnect | `DELETE /v1/vaults/{vault}/mcp-oauth/{key}` | `204`; unknown account: `404` |
-
-Open `authorize_url` in the user's browser. The public callback forwards
-`state`, `code` and the provider's `iss` parameter unchanged. Servers
-advertising RFC 9207 support (including Linear) require an exact matching
-issuer; missing or mismatched values produce a failed result with
-`code:"issuer_mismatch"`. A declined consent can instead forward
-`{state,error:"access_denied",iss?}`.
-
-States expire after ten minutes, are encrypted in the database, survive a
-gateway restart and are consumed once, even with concurrent completions.
-The completing caller must have member-or-admin access to the state's vault.
-Invalid, expired or replayed states return `400 invalid_state`. When a token
-response includes an ID token and metadata publishes `jwks_uri`, the gateway
-verifies its RS256/ES256 signature, issuer, audience/authorized party, expiration,
-issued-at, nonce and optional access-token hash before using `email` or
-`preferred_username`. Supported identity scopes are requested when advertised.
-No unverified ID token is decoded for display. Verification failures warn
-without failing sign-in and leave `account` null. Completion and lists return
-the verified label; stable subjects remain encrypted and private.
-
-The optional progress-polling endpoint is not implemented. NanoClaw uses the
-completion result and notifies the opening window, then reloads the account
-list. Account status is `connected` or `needs_reconnect`; client kind is
-`registered`, `app` or `metadata`.
-
-## Discovery and client isolation
-
-The gateway probes the MCP URL without credentials, reads RFC 9728 protected
-resource metadata from the challenge or well-known path, then discovers the
-authorization server with RFC 8414 and OIDC fallback. Issuers, resource
-identifiers, endpoint schemes and S256 PKCE support are validated.
-
-When RFC 7591 registration is offered, each **(vault, issuer)** gets its own
-client. Its `client_name`, which consent screens show, is the start request's
-`client_name` (NanoClaw sends the agent group's name; 1-100 printable
-characters), or `NanoClaw <vault ID>` when none was ever given. A start with a
-different name registers a new client; the replaced one is deleted with RFC 7592
-once no account or pending sign-in in the vault uses it. The registration ID, issued secret, management URI and registration
-access token are encrypted in that vault. Different vaults never reuse a
-dynamic registration. Confidential client authentication is retained when
-the server requires it.
-
-An explicit `app_id` selects an effective configured app whose issuer must match
-discovery. Otherwise registration retains preference, followed by the unique
-configured app matching the issuer (same-ID vault overrides hide install apps),
-then the public client-metadata URL if CIMD is supported. Multiple matching apps
-return `409 ambiguous_app`; no match without CIMD returns
-`registration_unsupported` with issuer information. Use the generic
-[install/vault app APIs](/guides/oauth-apps) to configure and enumerate apps.
-Direct API accounts use the same completion relay but different, host-wide
-routing; MCP accounts never inherit those API-host routes.
-
-Probing does not register a client or begin a sign-in. All discovery,
-registration, exchange, refresh and cleanup traffic uses the network guard.
-Private destinations require the instance-wide `AGENT_VAULT_NETWORK_ALLOWLIST`;
-there are no per-vault network settings. Cloud metadata stays blocked.
-Redirects cannot downgrade HTTPS, and credential-bearing POSTs are not
-automatically redirected.
-
-## Tokens, services and refresh
-
-Authorization uses S256 PKCE and the metadata's canonical `resource`
-identifier. Both code exchange and refresh send that same RFC 8707 resource.
-Refresh-token rotation is persisted. Refreshes are serialized under the
-vault's existing lock, so concurrent requests share the updated token rather
-than reusing a rotated refresh token.
-
-Completion atomically stores the `mcp_oauth` credential, encrypted account and
-service configuration. The generated bearer services cover the MCP endpoint
-and descendants, but not similarly named sibling paths. Existing unrelated
-services are retained. An exact destination collision returns
-`409 service_conflict` rather than claiming a connection whose service would
-be shadowed. A concurrent non-MCP credential collision likewise fails with
-`409 credential_conflict`. Failed commits leave no half-written account or
-credential, and newly issued unused tokens are revoked where supported.
-
-Generated `MCP_…` credentials are managed through these account endpoints;
-ordinary credential edits/deletes and legacy OAuth uploads cannot overwrite
-them. The standard reveal-disabled boundary still applies to every role.
-Account, registration and management secrets are never returned by these APIs.
-
-On `invalid_client`, the gateway re-registers a dynamic client once and marks
-accounts issued to the old client as needing a new sign-in. It does not retry
-an old authorization code under the new client or keep registering on every
-proxy request. Permanent refresh failures also require reconnection.
-
-The proxy strips `resource_metadata` from 401 challenges on managed MCP
-services, including failed WebSocket upgrade responses, while preserving
-ordinary challenge information. Container SDKs therefore do not start their
-own OAuth registration flow.
-
-`connected_at` and `updated_at` are persisted. `last_used_at` is recorded when
-a token is resolved for injection, with writes coalesced to at most once per
-minute per account. It denotes use for an outbound attempt, not proof that
-the upstream accepted the request.
-
-## Disconnect and deletion
-
-Disconnect revokes access/refresh tokens and uses RFC 7592 client deletion
-when the registration provides a management URI and token. A registration shared by several resources in the **same vault** is retained
-while another account or pending sign-in uses it. No other vault is affected.
-
-Remote cleanup is best-effort: unsupported or unreachable cleanup endpoints
-are logged, but local disconnect still removes the encrypted account,
-credential, generated services and pending flows for that account. Local
-database failures are returned as errors. Deleting a vault performs remote
-cleanup before the database's atomic cascade removes its records.
-
-## Validation
-
-Discovery and registration reuse the MCP Go SDK v1.8.0 `oauthex` sources.
-The pinned source subset, full upstream license and local-change NOTICE are
-under `internal/mcpauth/oauthex/`; no new Go module is required. Release archives
-include those notices, and images retain them under
-`/usr/share/licenses/agent-vault/mcp-sdk/`.
-
-```bash
-go test -mod=readonly -race ./internal/mcpauth/... ./internal/oauth ./internal/oauthrelay ./internal/server ./internal/mitm
-CGO_ENABLED=0 go build -mod=readonly -tags notelemetry -trimpath -ldflags='-s -w' -o agent-vault .
+{"label":"Example MCP","kind":"mcp_oauth","resource_url":"https://mcp.example.com/mcp"}
 ```
 
-Use an isolated HOME and non-default ports for process-level tests; do not
-replace the live canary binary or restart its service.
+The draft has a stable connection ID. Start consent with
+`POST /v1/managed-users/{user}/connections/{connection}/oauth/start`, body
+`{resource_url?,app_id?,scopes?}`. Resource and explicit app identity are pinned;
+use a different connection for a different identity. The result is
+`{state,authorize_url}`.
 
-The local tests cover two-vault client isolation, code/refresh resource
-binding, PKCE, OIDC/CIMD and configured-app fallback, rotation, one-time
-re-registration, issuer/replay/expiry checks, transaction rollback,
-Unix-socket injection, challenge filtering and disconnect/vault cleanup.
+Existing discovery, RFC 7591 dynamic registration, configured apps, client
+metadata documents and PKCE are reused. Registrations are connection-scoped,
+including multiple accounts at the same resource in the same user's library.
+There is no automatic account merge or scope union. An explicit app resolves
+ambiguous issuer configurations. MCP services remain resource/path/port scoped.
 
-The NanoClaw deployment agent reported live P2 acceptance on 2026-10-22
-using `4065e67`: two groups registered distinct Linear clients, real
-`list_teams` calls worked through both sockets, disconnecting one left the
-other working, and the disconnected group received a 401 without
-`resource_metadata`. That accepted client-name commit is now folded into
-`bananaclaw`; this does not imply that later P4 changes are deployed.
+The authenticated callback relay sends:
+
+```http
+POST /v1/oauth/complete
+Content-Type: application/json
+
+{"user_id":"<initiating native ID>","state":"<state>","code":"<code>","iss":"<issuer>"}
+```
+
+The same authorized host transport is required. The native user must still be
+active and own the exact connection. Ownership/revision is checked before and
+after token exchange. State is single-use, expires after ten minutes, and pins
+resource, issuer, client, redirect, verifier and initiating user. Forward `iss`
+unchanged when present; RFC 9207 providers require it. Completion returns
+`{connection_id,status,account?,code?,error?}`, never a vault credential key.
+Anonymous browser completion cannot complete a managed flow.
+
+Refresh `GET /.../connections/{connection}` and explicitly grant names from its
+authorized `services` to group vaults. Drafts cannot be granted. Tokens,
+refresh-token rotation and DCR client state stay central and encrypted. A
+`needs_reconnect` connection needs another owner consent, not registration by
+the container. Scope, identity or client-authority expansion suspends existing
+grants pending explicit reapproval.
+
+## SDK placeholders (F8)
+
+Group access metadata/discovery exposes an opaque `BIND_...` credential handle
+for an OAuth binding. Configure `av-access:<binding handle>` and
+`av-refresh:<binding handle>` in stdio clients, never a connection ID, library
+key or real token.
+
+Known token authorities are intercepted persistently, even after disconnection.
+Only an active binding in the authenticated group can refresh at the exact
+pinned HTTPS token endpoint. The synthetic response returns that binding's
+placeholders, never contacts the provider and never exposes real tokens.
+Injection performs the central real refresh when needed and rechecks native
+authorization after resolution. Revoked, suspended, wrong-endpoint and copied
+cross-group handles fail explicitly. Operator-approved unmatched blind tunnels
+remain uninspected.
+
+Credentialed streams are rechecked every 100 ms and terminated when authority
+is lost. New requests never use a cached positive grant decision. Removing a
+group or its final grant leaves the OAuth account and registration intact.
+Only owner deletion of the global connection invokes configured revocation and
+client cleanup; failures return `502` and retain disabled encrypted state for
+an explicit retry. Providers without revocation metadata support local
+disconnection only.
+
+Earlier group-owned `/mcp-oauth` routes and automatic startup conversions are
+removed. Unsupported populated fork state requires reviewed offline adoption
+before listeners or restored sockets start.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Infisical/agent-vault/internal/gatewayconfig"
 	"github.com/Infisical/agent-vault/internal/oauthrelay"
 )
 
@@ -28,6 +29,23 @@ func (s *Server) handleOAuthRelayComplete(w http.ResponseWriter, r *http.Request
 	var input oauthrelay.Input
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		jsonError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if handled, result, err := s.completeManagedOAuth(w, r, input); handled {
+		if errors.Is(err, errManagedOAuthDenied) {
+			jsonCodedError(w, 403, "oauth_user_mismatch", err.Error())
+			return
+		}
+		if s.mcpError(w, err) {
+			return
+		}
+		if result != nil {
+			jsonOK(w, result)
+		}
+		return
+	}
+	if gatewayconfig.Headless() {
+		jsonCodedError(w, 400, "invalid_state", "Unknown managed connection flow")
 		return
 	}
 	config, err := oauthrelay.Configuration(s.baseURL)

@@ -8,7 +8,7 @@ on:
       version:
         description: "Version embedded in dry-run artifacts (no release is published)"
         required: true
-        default: "gw-v0.1.0"
+        default: "gw-v0.2.0"
 
 permissions:
   contents: read

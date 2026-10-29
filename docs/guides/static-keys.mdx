@@ -1,103 +1,80 @@
 ---
-title: "Static keys and service edits"
-description: "Atomic static keys, safe per-service edits and credential timestamps."
+title: "Shared static connections"
+description: "Store a static credential set once in its native user's library."
 ---
 
-All mutations use a host bearer token with vault admin access. Credential
-values are write-only when `reveal_disabled` is enabled.
+NanoClaw manages credentials through the authenticated host, never through a
+container or group-owned credential CRUD endpoint. See
+[managed gateway setup](/guides/nanoclaw-gateway) for native identity provisioning.
+All requests below require the authorized `nanoclaw-host` agent and explicitly
+select the active mapped native user in the URL. Transport owner privileges are
+not inherited by that user.
 
-## Preferred atomic API
+## Create once
 
-`PUT /v1/vaults/{vault}/keys/{KEY}` accepts:
+`POST /v1/managed-users/{user}/connections` is create-only:
 
 ```json
 {
-  "value": "<operator-supplied value>",
-  "service": {
-    "name": "example-key",
+  "label": "Example API",
+  "kind": "static",
+  "values": {"API_KEY": "<write-only value>"},
+  "services": [{
+    "name": "example-api",
     "host": "api.example.com/v1/*",
-    "auth": {"type": "bearer", "token": "EXAMPLE_KEY"}
-  }
+    "auth": {"type": "bearer", "token": "API_KEY"}
+  }]
 }
 ```
 
-The path key in this example is `EXAMPLE_KEY`. `service` uses the existing
-broker service shape (bearer, basic, API-key, custom headers or substitutions).
-It must reference only that key. New keys require a nonempty value; omitting
-`value` on an existing key preserves it while changing the destination.
-The credential and its single service are replaced in one transaction.
-Old services using only that key are removed, so renaming a service does not
-leave an old destination active. Sharing a service across multiple keys
-returns `409`, as does colliding with another service's name.
+Values use UPPER_SNAKE_CASE keys. Bearer, Basic pairs, API-key headers, multiple
+custom-header templates (`{{ KEY }}`), and scoped substitutions reuse native
+broker recipes. Services require explicit names and HTTPS. Each referenced key
+must belong to the same connection. Overlapping selected services are rejected,
+not resolved by private/shared precedence.
 
-Success returns `200 {key}`. `DELETE /v1/vaults/{vault}/keys/{KEY}` atomically
-removes the static credential and its services (`204`; missing key `404`).
-OAuth accounts must be edited through their own lifecycle APIs.
+The response contains safe connection metadata, key **names**, services, native
+owner, grants, status and an opaque quoted `revision`. It never contains values.
+`GET /v1/managed-users/{user}/connections` returns `{connections:[...]}`.
+Individual GET uses `/connections/{connection}` and includes `ETag`.
 
-## Conditional multi-key sets
+## Rotate or edit
 
-Use `/v1/vaults/{vault}/key-sets/{service-name}` for create-only imports and
-services with several **distinct** credentials. This is separate from the
-single-key upsert API above.
+`PUT /v1/managed-users/{user}/connections/{connection}` accepts a subset of
+`{label,enabled,services,values}` and requires the exact revision in `If-Match`.
+Missing preconditions return `428`; stale revisions return `412`. Reload and ask
+the user to review a conflict; never retry as an upsert.
 
-- `GET` requires vault membership and returns `{service, keys, revision}` plus
-  the same opaque, quoted revision in `ETag`. Values, ciphertext and nonces
-  are never returned. Responses use `Cache-Control: no-store`.
-- `PUT` with `If-None-Match: *` creates only. Supply
-  `{"service": {...}, "values": {"FIRST_KEY": "...", "SECOND_KEY": "..."}}`.
-  Every referenced key must be new and have a nonempty value.
-- `PUT` with one exact `If-Match: <revision>` edits an existing set. The
-  service name and referenced key membership cannot change. Omit `values`
-  or pass `{}` to preserve all values, or supply only the keys to rotate.
-- `DELETE` with the exact `If-Match` removes the service and **all** its
-  exclusive static keys in one transaction.
+`values` patches named components, including new valid keys. Omitted components
+are retained. Rotation is encrypted once and is immediately used by all active
+references. Service-policy changes suspend grants until explicitly reapproved.
+Disabling a connection suspends use; reenabling does not silently reapprove it.
 
-For example, `auth.type: "custom"` can use
-`Authorization: "Bearer {{ FIRST_KEY }}"` and
-`x-api-key: "{{ SECOND_KEY }}"` together. The keys remain separate; this
-does not assume their values are identical. Put actual values only in `values`,
-never routing metadata.
+## Share selected services
 
-Missing/malformed/ambiguous conditions return `428`; an existing create target
-or stale revision returns `412`. Refresh and review the metadata before retrying,
-never switch to an upsert. Rotating a value or changing routing through another
-API invalidates the revision; usage timestamps alone do not.
+```http
+PUT /v1/managed-users/{user}/connections/{connection}/grants/{group-vault}
+If-None-Match: *
+Content-Type: application/json
 
-The vault mutation lock and SQL transaction cover conditional checks,
-credential changes and service storage together. Creation rejects existing
-keys or names. Any key referenced by another service, managed OAuth/MCP
-namespace, or overlapping recipient is rejected rather than shadowed.
-Recipient checks are intentionally conservative even for differing paths.
-Only the built-in credential store is supported.
+{"services":["example-api"]}
+```
 
-Sets support 1–64 keys. Values must be nonempty, at most 16 KiB, and contain
-no CR, LF or NUL. New and edited sets enforce HTTPS-only injection.
-Private-network dialing permission does not waive TLS requirements; validate
-the actual client workload before activation.
+The effective user must both own the connection and hold native destination
+vault-admin membership. Instance ownership does not substitute for membership.
+An existing grant returns `409` without an exact `If-Match` connection revision.
+Updates/reapproval require that exact current revision. Selected names must
+belong to the connection; receivers cannot retarget, rotate or reshare it.
 
-## Per-service edits
+Owner detach uses DELETE on the grant URL. Destination admins may instead use
+`DELETE /v1/managed-users/{user}/vaults/{vault}/access/{connection}`.
+`GET /.../vaults/{vault}/access` returns `{grants:[...]}` with only that group's
+connection references, owner labels, approved services and status.
 
-`PUT /v1/vaults/{vault}/services/{name}` accepts a single service object;
-`name` can be omitted from the body or must match the URL. It upserts that
-name under the vault mutation lock, preserving every other service.
-`DELETE /v1/vaults/{vault}/services/{name}` uses the existing delete endpoint
-and returns `200` metadata.
+Detachment never deletes the source or invokes upstream cleanup. Global
+connection deletion is owner-only and first revokes every recipient. There is
+no credential-copy, fan-out synchronization or F12 API.
 
-Names beginning `mcp-` or `oauth-` are reserved. Direct PUT/POST/PATCH/DELETE,
-bulk replacement and clearing cannot change/remove generated account
-services (`409`). A bulk PUT must retain generated services unchanged.
-Non-managed services cannot reference managed account credentials.
-Static keys and service edits also return `409` if they would overlap or shadow
-a host-wide HTTPS OAuth-account route, even when using another credential key.
-
-The legacy `POST /v1/credentials` and bulk service APIs remain available,
-but separate credential/service requests are not an atomic transaction.
-Prefer the atomic key API when a key has one destination.
-
-## Timestamps
-
-`GET /v1/credentials?vault=...` includes `updated_at` and nullable
-`last_used_at` on credential metadata entries. Static usage is recorded when
-resolved for proxy injection, with persisted writes coalesced to once per
-minute per credential. Usage survives restart and is removed with the key.
-It represents an outbound attempt, not proof of upstream success.
+The fork's earlier `/keys`, `/key-sets` and group-owned connection-management
+routes are removed, not aliases. Native upstream standalone credential/service
+management remains available outside headless mode.

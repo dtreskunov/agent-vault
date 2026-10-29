@@ -21,11 +21,26 @@ const MaxMaterializeBytes int64 = 64 << 20 // 64 MiB
 // It is produced once per CONNECT on the MITM ingress and carried through
 // to credential injection.
 type ProxyScope struct {
-	AgentID   string // non-empty for agent tokens
-	UserID    string // non-empty for user sessions
-	VaultID   string
-	VaultName string
-	VaultRole string
+	TransportActorID string
+	AgentID          string // non-empty for agent tokens
+	UserID           string // non-empty for user sessions
+	VaultID          string
+	VaultName        string
+	VaultRole        string
+}
+
+type proxyActorContextKey struct{}
+
+func WithProxyActor(ctx context.Context, scope *ProxyScope) context.Context {
+	id := scope.TransportActorID
+	if id == "" {
+		id = scope.ActorID()
+	}
+	return context.WithValue(ctx, proxyActorContextKey{}, id)
+}
+func ProxyActor(ctx context.Context) string {
+	id, _ := ctx.Value(proxyActorContextKey{}).(string)
+	return id
 }
 
 // ActorID returns the non-empty principal ID — UserID for user
@@ -91,18 +106,19 @@ func (r *StoreSessionResolver) ResolveForProxy(ctx context.Context, token, vault
 	// the session's vault name; never silently retarget.
 	if sess.VaultID != "" {
 		v, err := r.Store.GetVaultByID(ctx, sess.VaultID)
-		if err != nil || v == nil {
+		if err != nil || v == nil || v.Purpose == "library" {
 			return nil, ErrVaultNotFound
 		}
 		if vaultHint != "" && vaultHint != v.Name {
 			return nil, ErrVaultHintMismatch
 		}
 		return &ProxyScope{
-			UserID:    sess.UserID,
-			AgentID:   sess.AgentID,
-			VaultID:   v.ID,
-			VaultName: v.Name,
-			VaultRole: sess.VaultRole,
+			TransportActorID: sess.CreatedByActorID,
+			UserID:           sess.UserID,
+			AgentID:          sess.AgentID,
+			VaultID:          v.ID,
+			VaultName:        v.Name,
+			VaultRole:        sess.VaultRole,
 		}, nil
 	}
 
@@ -114,7 +130,7 @@ func (r *StoreSessionResolver) ResolveForProxy(ctx context.Context, token, vault
 
 	if vaultHint != "" {
 		v, err := r.Store.GetVault(ctx, vaultHint)
-		if err != nil || v == nil {
+		if err != nil || v == nil || v.Purpose == "library" {
 			return nil, ErrVaultNotFound
 		}
 		role, err := r.Store.GetVaultRole(ctx, sess.AgentID, v.ID)

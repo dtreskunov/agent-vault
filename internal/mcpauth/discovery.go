@@ -179,14 +179,14 @@ func (a Account) services() ([]broker.Service, error) {
 	if path == "" {
 		path = "/"
 	}
-	name := "mcp-" + strings.ToLower(strings.TrimPrefix(a.Key, "MCP_"))
+	name := servicePrefix(a)
 	auth := broker.Auth{Type: "bearer", Token: a.Key}
-	exact := broker.Service{Name: name, Host: host, Port: port, Path: path, Auth: auth}
+	exact := broker.Service{Name: name, Host: host, Port: port, Path: path, Auth: auth, HTTPSOnly: a.ConnectionID != ""}
 	services := []broker.Service{exact}
 	if strings.HasSuffix(path, "/") {
 		services[0].Path = path + "*"
 	} else {
-		services = append(services, broker.Service{Name: name + "-children", Host: host, Port: port, Path: path + "/*", Auth: auth})
+		services = append(services, broker.Service{Name: name + "-children", Host: host, Port: port, Path: path + "/*", Auth: auth, HTTPSOnly: a.ConnectionID != ""})
 	}
 	return services, nil
 }

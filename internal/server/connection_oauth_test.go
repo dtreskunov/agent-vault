@@ -1,0 +1,309 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/gatewaytest"
+	"github.com/Infisical/agent-vault/internal/mcpauth"
+)
+
+type managedOAuthProvider struct {
+	mu                     sync.Mutex
+	refreshes, revocations int
+	block, release         chan struct{}
+	failCleanup            bool
+}
+
+func (p *managedOAuthProvider) serve(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	w.Header().Set("Content-Type", "application/json")
+	switch r.URL.Path {
+	case "/token":
+		if r.Form.Get("grant_type") == "authorization_code" {
+			if r.Form.Get("code_verifier") == "" || r.Form.Get("client_secret") != "synthetic-client-secret" {
+				w.WriteHeader(400)
+				return
+			}
+			fmt.Fprint(w, `{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","token_type":"Bearer","expires_in":3600,"scope":"read"}`)
+			return
+		}
+		p.mu.Lock()
+		p.refreshes++
+		number := p.refreshes
+		block, release := p.block, p.release
+		p.mu.Unlock()
+		if block != nil {
+			close(block)
+			<-release
+		}
+		fmt.Fprintf(w, `{"access_token":"synthetic-refreshed-%d","refresh_token":"synthetic-rotated-%d","token_type":"Bearer","expires_in":3600,"scope":"read"}`, number, number)
+	case "/revoke":
+		p.mu.Lock()
+		p.revocations++
+		fail := p.failCleanup
+		p.mu.Unlock()
+		if fail {
+			w.WriteHeader(503)
+		} else {
+			fmt.Fprint(w, `{}`)
+		}
+	default:
+		w.WriteHeader(404)
+	}
+}
+func setupManagedOAuth(t *testing.T, baseURLs ...string) (*managedFixture, *managedOAuthProvider, *connection, string) {
+	t.Helper()
+	gatewaytest.UseLoopbackDNS(t)
+	t.Setenv("AGENT_VAULT_NETWORK_ALLOWLIST", "127.0.0.1")
+	f := newManagedFixture(t, baseURLs...)
+	provider := &managedOAuthProvider{}
+	authority := httptest.NewServer(http.HandlerFunc(provider.serve))
+	t.Cleanup(authority.Close)
+	issuer := strings.Replace(authority.URL, "127.0.0.1", "localhost.localdomain", 1)
+	app := fmt.Sprintf(`{"issuer":%q,"client_id":"test-client","client_secret":"synthetic-client-secret","label":"Test app","authorization_endpoint":%q,"token_endpoint":%q,"revocation_endpoint":%q,"api_hosts":["api.example.com"],"default_scopes":["read"],"identity":"none"}`, issuer, issuer+"/authorize", issuer+"/token", issuer+"/revoke")
+	w := f.call("PUT", f.base()+"/oauth-apps/test-app?scope=user", app, "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), `"source":"user"`) || strings.Contains(w.Body.String(), "synthetic-") {
+		t.Fatal("unsafe or incorrect AppInfo", w.Body)
+	}
+	if w = f.call("PUT", f.base()+"/oauth-apps/install-app?scope=install", app, ""); w.Code != 403 {
+		t.Fatal("transport owner privileges inherited by effective user", w.Code)
+	}
+	c := f.create(`{"label":"Reusable OAuth account","kind":"oauth_app","app_id":"test-app","scopes":["read"]}`)
+	start := f.call("POST", f.base()+"/connections/"+c.ID+"/oauth/start", `{}`, "")
+	if start.Code != 200 {
+		t.Fatal(start.Code, start.Body)
+	}
+	var flow mcpauth.Started
+	json.Unmarshal(start.Body.Bytes(), &flow)
+	if flow.State == "" || !strings.Contains(flow.AuthorizeURL, "code_challenge=") {
+		t.Fatal("missing PKCE-bound flow")
+	}
+	return f, provider, c, flow.State
+}
+func (f *managedFixture) complete(c *connection, state, user string) *httptest.ResponseRecorder {
+	return f.call("POST", "/v1/oauth/complete", fmt.Sprintf(`{"state":%q,"code":"code","user_id":%q}`, state, user), "")
+}
+func (f *managedFixture) expireOAuth(c *connection) {
+	f.t.Helper()
+	db, d := f.db.GatewaySQL()
+	var ct, nonce []byte
+	if err := db.QueryRow(d.Rebind(`SELECT ciphertext,nonce FROM gateway_oauth_records WHERE vault_id=? AND kind='account' AND record_key=?`), c.library, c.ID).Scan(&ct, &nonce); err != nil {
+		// Wire metadata deliberately excludes the storage library.
+		loaded, loadErr := f.s.loadConnection(context.Background(), c.ID)
+		if loadErr != nil {
+			f.t.Fatal(loadErr)
+		}
+		c.library = loaded.library
+		if err = db.QueryRow(d.Rebind(`SELECT ciphertext,nonce FROM gateway_oauth_records WHERE vault_id=? AND kind='account' AND record_key=?`), c.library, c.ID).Scan(&ct, &nonce); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	raw, err := crypto.Decrypt(ct, nonce, f.s.encKey)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var account mcpauth.Account
+	if err = json.Unmarshal(raw, &account); err != nil {
+		f.t.Fatal(err)
+	}
+	account.ExpiresAt = time.Now().Add(-time.Hour)
+	raw, err = json.Marshal(account)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	ct, nonce, err = crypto.Encrypt(raw, f.s.encKey)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err = db.Exec(d.Rebind(`UPDATE gateway_oauth_records SET ciphertext=?,nonce=? WHERE vault_id=? AND kind='account' AND record_key=?`), ct, nonce, c.library, c.ID); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func TestManagedConnectionOAuthAppLifecycleAndRevocationDuringRefresh(t *testing.T) {
+	f, provider, c, state := setupManagedOAuth(t)
+	ctx := context.Background()
+	route := f.base() + "/connections/" + c.ID
+	if w := f.complete(c, state, "wrong-user"); w.Code != 403 {
+		t.Fatal("callback accepted another user", w.Code, w.Body)
+	}
+	w := f.complete(c, state, f.user)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"connection_id":"`+c.ID+`"`) || strings.Contains(w.Body.String(), `"key"`) {
+		t.Fatal("callback lost authoritative connection identity", w.Code, w.Body)
+	}
+	if w = f.complete(c, state, f.user); w.Code != 400 {
+		t.Fatal("callback state replay accepted", w.Code)
+	}
+	loaded, err := f.s.loadConnection(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = loaded
+	if c.Status != "ready" || len(c.Services) != 1 || c.Services[0].Auth.Token != c.ID || c.ScopeSource != "provider" {
+		t.Fatal("authorized OAuth service not derived from connection")
+	}
+	service := c.Services[0].Name
+	for _, group := range []string{"group-one", "group-two"} {
+		w = f.call("PUT", route+"/grants/"+group, fmt.Sprintf(`{"services":[%q]}`, service), "")
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body)
+		}
+	}
+	one, _ := f.db.GetVault(ctx, "group-one")
+	two, _ := f.db.GetVault(ctx, "group-two")
+	f.expireOAuth(c)
+	var wg sync.WaitGroup
+	failures := make(chan error, 16)
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			vault := one.ID
+			if i%2 == 0 {
+				vault = two.ID
+			}
+			result, err := f.s.CredentialProvider().Inject(ctx, vault, "api.example.com", 443, "/anything")
+			if err == nil && result.Headers["Authorization"] != "Bearer synthetic-refreshed-1" {
+				err = fmt.Errorf("incorrect centrally refreshed token")
+			}
+			failures <- err
+		}()
+	}
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider.mu.Lock()
+	refreshes := provider.refreshes
+	provider.mu.Unlock()
+	if refreshes != 1 {
+		t.Fatal("shared refresh was duplicated", refreshes)
+	}
+	bindings, err := f.s.loadBindings(ctx, one.ID)
+	if err != nil || len(bindings) != 1 {
+		t.Fatal(err)
+	}
+	access := httptest.NewRequest("GET", "https://api.example.com/anything", nil)
+	access.Header.Set("Authorization", "Bearer av-access:"+bindings[0].handle)
+	if response, err := f.s.LocalTokenResponse(ctx, two.ID, access); err != nil || response == nil || response.StatusCode != 403 {
+		t.Fatal("copied access handle crossed group boundary", err)
+	}
+	access.Header.Set("Authorization", "Bearer av-access:"+bindings[0].handle)
+	if response, err := f.s.LocalTokenResponse(ctx, one.ID, access); err != nil || response != nil {
+		t.Fatal("valid group access handle rejected", err)
+	}
+	f.expireOAuth(c)
+	provider.mu.Lock()
+	provider.block = make(chan struct{})
+	provider.release = make(chan struct{})
+	block, release := provider.block, provider.release
+	provider.mu.Unlock()
+	outcome := make(chan error, 1)
+	go func() {
+		_, err := f.s.CredentialProvider().Inject(ctx, one.ID, "api.example.com", 443, "/anything")
+		outcome <- err
+	}()
+	select {
+	case <-block:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+	if w = f.call("DELETE", route+"/grants/group-one", "", ""); w.Code != 204 {
+		t.Fatal(w.Code, w.Body)
+	}
+	close(release)
+	if err = <-outcome; err == nil {
+		t.Fatal("credential was injected after revocation during refresh")
+	}
+	provider.mu.Lock()
+	provider.block, provider.release = nil, nil
+	revocations := provider.revocations
+	provider.mu.Unlock()
+	if revocations != 0 {
+		t.Fatal("group detachment revoked upstream")
+	}
+	if _, err = f.s.CredentialProvider().Inject(ctx, two.ID, "api.example.com", 443, "/anything"); err != nil {
+		t.Fatal("detachment affected other group refresh state", err)
+	}
+	if w = f.call("DELETE", "/v1/vaults/group-two", "", ""); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	provider.mu.Lock()
+	revocations = provider.revocations
+	provider.mu.Unlock()
+	if revocations != 0 {
+		t.Fatal("group deletion revoked upstream")
+	}
+	if w = f.call("GET", route, "", ""); w.Code != 200 {
+		t.Fatal("group deletion destroyed account")
+	}
+	provider.mu.Lock()
+	provider.failCleanup = true
+	provider.mu.Unlock()
+	if w = f.call("DELETE", route, "", ""); w.Code != 502 || !strings.Contains(w.Body.String(), "upstream_cleanup_failed") {
+		t.Fatal("upstream cleanup failure hidden", w.Code, w.Body)
+	}
+	current, err := f.s.loadConnection(ctx, c.ID)
+	if err != nil || current.Status != "disabled" {
+		t.Fatal("failed cleanup did not retain disabled connection")
+	}
+	provider.mu.Lock()
+	provider.failCleanup = false
+	provider.mu.Unlock()
+	if w = f.call("DELETE", route, "", ""); w.Code != 204 {
+		t.Fatal("explicit cleanup retry failed", w.Code, w.Body)
+	}
+	if w = f.call("GET", route, "", ""); w.Code != 404 {
+		t.Fatal("deleted global connection remained visible")
+	}
+}
+
+func TestManagedConnectionOAuthScopeAndAppPolicySuspendGrants(t *testing.T) {
+	f, _, c, state := setupManagedOAuth(t)
+	ctx := context.Background()
+	route := f.base() + "/connections/" + c.ID
+	if w := f.complete(c, state, f.user); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	c, err := f.s.loadConnection(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := f.call("PUT", route+"/grants/group-one", fmt.Sprintf(`{"services":[%q]}`, c.Services[0].Name), "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	w = f.call("POST", route+"/oauth/start", `{"scopes":["read","write"]}`, "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	one, _ := f.db.GetVault(ctx, "group-one")
+	if _, err = f.s.CredentialProvider().Inject(ctx, one.ID, "api.example.com", 443, "/"); err == nil {
+		t.Fatal("scope expansion silently broadened existing grant")
+	}
+	w = f.call("PUT", f.base()+"/oauth-apps/test-app?scope=user", `{"client_id":"changed-client","client_secret":"synthetic-new-secret"}`, "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	c, err = f.s.loadConnection(ctx, c.ID)
+	if err != nil || c.Status != "needs_reconnect" || len(c.Grants) != 1 || c.Grants[0].Status != "suspended" {
+		t.Fatal("app binding change did not retain and suspend shared account", err)
+	}
+	if w = f.call("POST", route+"/oauth/start", `{"app_id":"different-app"}`, ""); w.Code != 409 {
+		t.Fatal("connection OAuth app identity was retargeted", w.Code)
+	}
+}

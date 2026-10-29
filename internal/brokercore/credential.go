@@ -33,6 +33,9 @@ func IsValidUnmatchedHostPolicy(p UnmatchedHostPolicy) bool {
 // InjectResult is the outcome of matching (host, path) and resolving
 // credentials to ready-to-attach HTTP headers.
 type InjectResult struct {
+	// Authorize rechecks a shared binding while a long-lived operation is open.
+	// Nil for native local services.
+	Authorize func(context.Context) error
 	// Headers carries SECRET values — never log. Caller must Set (not
 	// Add) so injected values win over client-supplied duplicates.
 	// Nil for passthrough services.

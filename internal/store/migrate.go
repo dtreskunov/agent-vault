@@ -27,6 +27,9 @@ func CountSourceTables(src *SQLStore) ([]TableCount, error) {
 		"vault_settings",
 		"skills",
 		"users",
+		"connections",
+		"connection_grants",
+		"connection_audit",
 		"agents",
 		"vault_grants",
 		"credentials",
@@ -121,12 +124,15 @@ func MigrateData(ctx context.Context, src, dst *SQLStore, progressFn func(table 
 	}{
 		{"instance_settings", copyInstanceSettings},
 		{"master_key", copyMasterKey},
+		{"users", copyUsers},
 		{"vaults", copyVaults},
 		{"vault_settings", copyVaultSettings},
 		{"skills", copySkills},
-		{"users", copyUsers},
 		{"agents", copyAgents},
 		{"vault_grants", copyVaultGrants},
+		{"connections", copyConnections},
+		{"connection_grants", copyConnectionGrants},
+		{"connection_audit", copyConnectionAudit},
 		{"credentials", copyCredentials},
 		{"credential_oauth", copyCredentialOAuth},
 		{"credential_oauth_states", copyCredentialOAuthStates},
@@ -285,7 +291,7 @@ func copyMasterKey(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Di
 }
 
 func copyVaults(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialect) (int, error) {
-	rows, err := src.db.QueryContext(ctx, "SELECT id, name, created_at, updated_at FROM vaults")
+	rows, err := src.db.QueryContext(ctx, "SELECT id, name, created_at, updated_at,purpose,owner_user_id FROM vaults")
 	if err != nil {
 		return 0, err
 	}
@@ -294,8 +300,10 @@ func copyVaults(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Diale
 	n := 0
 	for rows.Next() {
 		var id, name string
+		var purpose string
+		var owner sql.NullString
 		var createdAt, updatedAt interface{}
-		if err := rows.Scan(&id, &name, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &name, &createdAt, &updatedAt, &purpose, &owner); err != nil {
 			return n, err
 		}
 		ca, err := convertTime(createdAt, src.dialect, dstDialect)
@@ -310,13 +318,13 @@ func copyVaults(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Diale
 			// The Postgres baseline already seeds this row; update it with
 			// the source data so timestamps and name match.
 			_, err = tx.ExecContext(ctx,
-				dstDialect.Rebind("UPDATE vaults SET name = ?, created_at = ?, updated_at = ? WHERE id = ?"),
-				name, ca, ua, id,
+				dstDialect.Rebind("UPDATE vaults SET name = ?, created_at = ?, updated_at = ?,purpose=?,owner_user_id=? WHERE id = ?"),
+				name, ca, ua, purpose, owner, id,
 			)
 		} else {
 			_, err = tx.ExecContext(ctx,
-				dstDialect.Rebind("INSERT INTO vaults (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)"),
-				id, name, ca, ua,
+				dstDialect.Rebind("INSERT INTO vaults (id, name, created_at, updated_at,purpose,owner_user_id) VALUES (?, ?, ?, ?,?,?)"),
+				id, name, ca, ua, purpose, owner,
 			)
 		}
 		if err != nil {
@@ -395,7 +403,7 @@ func copySkills(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Diale
 
 func copyUsers(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialect) (int, error) {
 	rows, err := src.db.QueryContext(ctx,
-		"SELECT id, email, password_hash, password_salt, role, created_at, updated_at, kdf_time, kdf_memory, kdf_threads, is_active FROM users")
+		"SELECT id, email, password_hash, password_salt, role, created_at, updated_at, kdf_time, kdf_memory, kdf_threads, is_active,auth_mode,installation_id,subject,display_name FROM users")
 	if err != nil {
 		return 0, err
 	}
@@ -403,11 +411,12 @@ func copyUsers(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialec
 
 	n := 0
 	for rows.Next() {
-		var id, email, role string
+		var id, role, mode, label string
+		var email, installation, subject sql.NullString
 		var pwHash, pwSalt []byte
 		var kdfTime, kdfMemory, kdfThreads int
 		var createdAt, updatedAt, isActive interface{}
-		if err := rows.Scan(&id, &email, &pwHash, &pwSalt, &role, &createdAt, &updatedAt, &kdfTime, &kdfMemory, &kdfThreads, &isActive); err != nil {
+		if err := rows.Scan(&id, &email, &pwHash, &pwSalt, &role, &createdAt, &updatedAt, &kdfTime, &kdfMemory, &kdfThreads, &isActive, &mode, &installation, &subject, &label); err != nil {
 			return n, err
 		}
 		ca, err := convertTime(createdAt, src.dialect, dstDialect)
@@ -423,8 +432,8 @@ func copyUsers(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialec
 			return n, fmt.Errorf("converting is_active: %w", err)
 		}
 		_, err = tx.ExecContext(ctx,
-			dstDialect.Rebind("INSERT INTO users (id, email, password_hash, password_salt, role, created_at, updated_at, kdf_time, kdf_memory, kdf_threads, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
-			id, email, pwHash, pwSalt, role, ca, ua, kdfTime, kdfMemory, kdfThreads, boolVal,
+			dstDialect.Rebind("INSERT INTO users (id, email, password_hash, password_salt, role, created_at, updated_at, kdf_time, kdf_memory, kdf_threads, is_active,auth_mode,installation_id,subject,display_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,?)"),
+			id, email, pwHash, pwSalt, role, ca, ua, kdfTime, kdfMemory, kdfThreads, boolVal, mode, installation, subject, label,
 		)
 		if err != nil {
 			return n, err

@@ -209,7 +209,7 @@ func (s *Server) SessionResolver() brokercore.SessionResolver {
 // this server's store and encryption key.
 func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 	p := &brokercore.StoreCredentialProvider{
-		Store:      gatewayCredentialStore{credentialStoreAdapter{s.store}, s.mcpOAuth, s.staticKeys},
+		Store:      gatewayCredentialStore{credentialStoreAdapter{s.store}, s.staticKeys},
 		OAuthStore: credentialStoreAdapter{s.store},
 		EncKey:     s.encKey,
 		Refresher:  s.oauthRefresher,
@@ -218,7 +218,12 @@ func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 	// time, before Start() builds s.infisicalDynamic. The adapter reads the
 	// field per request, so resolution works regardless of init order.
 	p.Dynamic = lateDynamicResolver{s}
-	return p
+	if _, ok := s.store.(interface {
+		GatewaySQL() (*sql.DB, store.Dialect)
+	}); !ok {
+		return p
+	}
+	return sharedCredentialProvider{s: s, local: p}
 }
 
 // lateDynamicResolver defers to s.infisicalDynamic, which Start() builds after
@@ -522,7 +527,7 @@ func (s *Server) actorFromSession(ctx context.Context, sess *store.Session) (*Ac
 	}
 	if sess.UserID != "" {
 		user, err := s.store.GetUserByID(ctx, sess.UserID)
-		if err != nil || user == nil {
+		if err != nil || user == nil || user.AuthMode == "managed" || !user.IsActive {
 			return nil, fmt.Errorf("user not found")
 		}
 		return &Actor{ID: user.ID, Type: "user", Role: user.Role, User: user}, nil
@@ -836,6 +841,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	// /health, /v1/status, and other public static routes rely on the
 	// server-wide TierGlobal backstop; no per-route limit is useful.
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("/v1/", http.NotFound)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("POST /v1/auth/register", ipAuth(limitBody(s.handleRegister)))
 	mux.HandleFunc("POST /v1/auth/verify", ipAuth(limitBody(s.handleVerify)))
@@ -1374,6 +1380,20 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if gatewayconfig.Headless() && sess.AgentID == "" {
 			jsonError(w, http.StatusUnauthorized, "Headless mode requires an agent token")
 			return
+		}
+		if sess.UserID != "" {
+			user, err := s.store.GetUserByID(r.Context(), sess.UserID)
+			if err != nil || user == nil || user.AuthMode == "managed" || !user.IsActive {
+				jsonError(w, 401, "Human session is not authorized")
+				return
+			}
+		}
+		if sess.AgentID != "" {
+			agent, err := s.store.GetAgentByID(r.Context(), sess.AgentID)
+			if err != nil || agent == nil || agent.Status != "active" {
+				jsonError(w, 401, "Agent is inactive")
+				return
+			}
 		}
 
 		s.maybeTouchSession(r.Context(), sess, token, clientIP(r), r.UserAgent())

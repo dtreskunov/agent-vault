@@ -8,7 +8,7 @@ description: "Pinned, reproducible gateway binaries with checksums and provenanc
 From a checkout **or an export of the same commit**, run:
 
 ```bash
-GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.1.0 "$PWD/agent-vault"
+GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.2.0 "$PWD/agent-vault"
 ```
 
 This is the canonical gateway build command. The script selects the exact Go
@@ -53,22 +53,24 @@ publishes a release**. Download the workflow artifact for inspection:
 
 ```bash
 gh workflow run gateway-release.yml --repo dtreskunov/agent-vault \
-  --ref bananaclaw -f version=gw-v0.1.0
+  --ref bananaclaw -f version=gw-v0.2.0
 gh run list --repo dtreskunov/agent-vault --workflow gateway-release.yml
 gh run download <run-id> --repo dtreskunov/agent-vault \
   --name gateway-release --dir gateway-dry-run
 ```
 
-Run this dry-run successfully before tagging. **Ask Denis before pushing the
-first tag** (`gw-v0.1.0` is proposed). No tag is created by the build command or
-manual workflow dispatch.
+Run this dry-run successfully before tagging. `gw-v0.2.0` is the breaking
+shared-connection/native-user release; deploy it only with the coordinated
+NanoClaw host and reviewed offline state adoption. Tags are pushed only with
+operator release approval. No tag is created by the build command or manual
+workflow dispatch.
 
 ## Verifying a release
 
 Pin the version and platform; do not install an unpinned `latest` binary:
 
 ```bash
-version=gw-v0.1.0
+version=gw-v0.2.0
 asset="agent-vault_${version}_linux_amd64"
 gh release download "$version" --repo dtreskunov/agent-vault \
   --pattern "$asset" --pattern SHA256SUMS --pattern build-provenance.jsonl

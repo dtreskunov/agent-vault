@@ -16,7 +16,7 @@ import (
 // under a different name than `name` (empty keeps the stored name).
 func (m *Manager) registeredClient(ctx context.Context, vault string, discovery *Discovery, force bool, name string) (*Client, error) {
 	var stored Client
-	err := m.repo.get(ctx, vault, "client", digest(discovery.Server.Issuer), &stored)
+	err := m.repo.get(ctx, vault, "client", clientRecordKey(ctx, discovery.Server.Issuer), &stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -76,11 +76,16 @@ func (m *Manager) registeredClient(ctx context.Context, vault string, discovery 
 		ManagementURI: registration.RegistrationClientURI, ManagementToken: registration.RegistrationAccessToken,
 		SecretExpiresAt: registration.ClientSecretExpiresAt, Name: name,
 	}
-	if err := m.repo.put(ctx, m.repo.db, vault, "client", digest(client.Issuer), &client, 0); err != nil {
+	if identity, ok := ctx.Value(managedFlowKey{}).(managedFlowIdentity); ok {
+		client.ConnectionID = identity.Connection
+	}
+	if err := m.repo.put(ctx, m.repo.db, vault, "client", clientRecordKey(ctx, client.Issuer), &client, 0); err != nil {
 		return nil, err
 	}
 	if hasStored && !force && stored.ID != client.ID {
-		m.retireClient(ctx, vault, stored)
+		if _, managed := ctx.Value(managedFlowKey{}).(managedFlowIdentity); !managed {
+			m.retireClient(ctx, vault, stored)
+		}
 	}
 	return &client, nil
 }

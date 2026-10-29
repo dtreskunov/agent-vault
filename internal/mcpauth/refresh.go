@@ -31,6 +31,10 @@ func (m *Manager) Credential(ctx context.Context, vault, key string) (*store.Cre
 	if !account.ExpiresAt.IsZero() && account.ExpiresAt.Before(m.now().Add(5*time.Minute)) {
 		if account.RefreshToken == "" {
 			if account.ExpiresAt.Before(m.now()) {
+				account.Reconnect, account.UpdatedAt = true, m.now().UTC()
+				if err := m.repo.saveAccount(ctx, vault, account, false); err != nil {
+					return nil, err
+				}
 				return nil, failure("oauth_not_connected", "MCP OAuth token expired; sign in again")
 			}
 		} else {

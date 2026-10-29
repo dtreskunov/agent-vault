@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,27 +14,27 @@ import (
 	"time"
 )
 
-func (m *Manager) revoke(ctx context.Context, account *Account) {
+func (m *Manager) revoke(ctx context.Context, account *Account) error {
 	if account.Client.Kind == "app" && account.Issuer == "https://github.com/login/oauth" && account.AccessToken != "" {
 		data, err := json.Marshal(map[string]string{"access_token": account.AccessToken})
 		if err != nil {
 			m.logger.Error("encoding GitHub revocation request", "err", err)
-			return
+			return err
 		}
 		request, err := http.NewRequestWithContext(ctx, "DELETE", "https://api.github.com/applications/"+url.PathEscape(account.Client.ID)+"/token", bytes.NewReader(data))
 		if err != nil {
 			m.logger.Error("building GitHub revocation request", "err", err)
-			return
+			return err
 		}
 		request.SetBasicAuth(account.Client.ID, account.Client.Secret)
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Accept", "application/vnd.github+json")
-		m.cleanupRequest(request, "GitHub token revocation", account.Key)
-		return
+		return m.cleanupRequest(request, "GitHub token revocation", account.Key)
 	}
 	if account.Metadata.RevocationEndpoint == "" {
-		return
+		return nil
 	}
+	var failures []error
 	for _, token := range []struct{ value, hint string }{
 		{account.AccessToken, "access_token"}, {account.RefreshToken, "refresh_token"},
 	} {
@@ -47,41 +48,125 @@ func (m *Manager) revoke(ctx context.Context, account *Account) {
 		request, err := http.NewRequestWithContext(ctx, "POST", account.Metadata.RevocationEndpoint, strings.NewReader(form.Encode()))
 		if err != nil {
 			m.logger.Warn("MCP token revocation request failed", "key", account.Key)
+			failures = append(failures, err)
 			continue
 		}
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		if account.Client.AuthMethod == "client_secret_basic" {
 			request.SetBasicAuth(account.Client.ID, account.Client.Secret)
 		}
-		m.cleanupRequest(request, "token revocation", account.Key)
+		if err := m.cleanupRequest(request, "token revocation", account.Key); err != nil {
+			failures = append(failures, err)
+		}
 	}
+	return errors.Join(failures...)
 }
 
-func (m *Manager) deleteClient(ctx context.Context, client Client) {
+func (m *Manager) deleteClient(ctx context.Context, client Client) error {
 	if client.Kind != "registered" || client.ManagementURI == "" || client.ManagementToken == "" {
-		return
+		return nil
 	}
 	request, err := http.NewRequestWithContext(ctx, "DELETE", client.ManagementURI, nil)
 	if err != nil {
 		m.logger.Warn("MCP client cleanup request failed", "issuer", client.Issuer)
-		return
+		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.ManagementToken)
-	m.cleanupRequest(request, "client deletion", client.Issuer)
+	return m.cleanupRequest(request, "client deletion", client.Issuer)
 }
 
-func (m *Manager) cleanupRequest(request *http.Request, operation, key string) {
+func (m *Manager) cleanupRequest(request *http.Request, operation, key string) error {
 	response, err := m.client.Do(request)
 	if err != nil {
 		m.logger.Warn("MCP remote cleanup failed; local disconnect continues", "operation", operation, "key", key)
-		return
+		return fmt.Errorf("%s failed", operation)
 	}
 	io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 	response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		m.logger.Warn("MCP remote cleanup unavailable; local disconnect continues",
 			"operation", operation, "key", key, "status", response.StatusCode)
+		return fmt.Errorf("%s returned HTTP %d", operation, response.StatusCode)
 	}
+	return nil
+}
+
+// DisconnectConnection is the sole shared-connection upstream lifecycle
+// operation. A group detachment never reaches this method.
+func (m *Manager) DisconnectConnection(ctx context.Context, vault, key string) error {
+	appUnlock, err := m.LockApps(ctx)
+	if err != nil {
+		return err
+	}
+	defer appUnlock()
+	unlock, err := m.core.LockVault(ctx, vault)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	account, err := m.repo.Account(ctx, vault, key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m.disconnectDraftConnection(ctx, vault, key)
+	}
+	if err != nil {
+		return err
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = m.revoke(cleanupCtx, account); err != nil {
+		return err
+	}
+	if err = m.deleteClient(cleanupCtx, account.Client); err != nil {
+		return err
+	}
+	tx, err := m.repo.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = m.repo.deleteAccount(ctx, tx, vault, account, false); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, m.repo.dialect.Rebind(`DELETE FROM gateway_oauth_records WHERE vault_id=? AND kind='client' AND record_key=?`), vault, digest(account.Issuer+"\x00"+key))
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (m *Manager) disconnectDraftConnection(ctx context.Context, vault, key string) error {
+	rows, err := m.repo.db.QueryContext(ctx, m.repo.dialect.Rebind(`SELECT ciphertext,nonce FROM gateway_oauth_records WHERE vault_id=? AND kind='client' AND account_key=?`), vault, key)
+	if err != nil {
+		return err
+	}
+	var clients []Client
+	for rows.Next() {
+		var ct, nonce []byte
+		var client Client
+		if err = rows.Scan(&ct, &nonce); err != nil {
+			rows.Close()
+			return err
+		}
+		if err = m.repo.decode(ct, nonce, &client); err != nil {
+			rows.Close()
+			return err
+		}
+		clients = append(clients, client)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for _, client := range clients {
+		if err = m.deleteClient(cleanupCtx, client); err != nil {
+			return err
+		}
+	}
+	_, err = m.repo.db.ExecContext(ctx, m.repo.dialect.Rebind(`DELETE FROM gateway_oauth_records WHERE vault_id=? AND account_key=? AND kind IN ('client','state')`), vault, key)
+	return err
 }
 
 func (m *Manager) Disconnect(ctx context.Context, vault, key string) error {

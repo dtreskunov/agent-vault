@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -194,6 +195,7 @@ func (p *Proxy) forwardRequest(
 	useTLSUpstream bool,
 	scope *brokercore.ProxyScope,
 ) {
+	r = r.WithContext(brokercore.WithProxyActor(r.Context(), scope))
 	start := time.Now()
 	authScheme, authHeader := detectAuthFromHeaders(r.Header)
 	event := brokercore.ProxyEvent{
@@ -264,6 +266,31 @@ func (p *Proxy) forwardRequest(
 		brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
 		emit(status, errCode)
 		return
+	}
+
+	if inject.Authorize != nil {
+		if err := inject.Authorize(r.Context()); err != nil {
+			brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
+			return
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		r = r.WithContext(ctx)
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if inject.Authorize(ctx) != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
 	}
 
 	if inject.HTTPSOnly && !useTLSUpstream {
@@ -337,6 +364,12 @@ func (p *Proxy) forwardRequest(
 		}
 	}
 
+	if inject.Authorize != nil {
+		if err := inject.Authorize(r.Context()); err != nil {
+			brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
+			return
+		}
+	}
 	if wsUpgrade {
 		wsSubs := filterWebSocketSubs(inject.Substitutions)
 		if len(wsSubs) > 0 {
@@ -424,6 +457,10 @@ func (p *Proxy) forwardRequest(
 		dst = &flushingWriter{w: w, f: f}
 	}
 	n, _ := io.Copy(dst, src)
+	if inject.Authorize != nil && r.Context().Err() != nil {
+		emit(resp.StatusCode, "shared_authorization_revoked")
+		panic(http.ErrAbortHandler)
+	}
 
 	if p.maxResponseBytes > 0 && n == p.maxResponseBytes {
 		var probe [1]byte

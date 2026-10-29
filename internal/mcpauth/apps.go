@@ -388,8 +388,15 @@ func (m *Manager) changeApp(ctx context.Context, vault, id string, old, next *Cl
 	for i := range accounts {
 		a := &accounts[i]
 		if invalidates {
-			if err := m.repo.deleteAccount(ctx, tx, a.vault, &a.value, false); err != nil {
-				return err
+			if a.value.ConnectionID != "" {
+				a.value.Reconnect = true
+				if err := m.repo.writeAccount(ctx, tx, a.vault, &a.value, false); err != nil {
+					return err
+				}
+			} else {
+				if err := m.repo.deleteAccount(ctx, tx, a.vault, &a.value, false); err != nil {
+					return err
+				}
 			}
 		} else if old.Secret != next.Secret {
 			a.value.Client.Secret, a.value.Client.UpdatedAt = next.Secret, next.UpdatedAt
@@ -428,7 +435,9 @@ func (m *Manager) changeApp(ctx context.Context, vault, id string, old, next *Cl
 		cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		for i := range accounts {
-			m.revoke(cleanup, &accounts[i].value)
+			if accounts[i].value.ConnectionID == "" {
+				m.revoke(cleanup, &accounts[i].value)
+			}
 		}
 	}
 	return nil

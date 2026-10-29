@@ -771,20 +771,20 @@ func (s *SQLStore) CreateVault(ctx context.Context, name string) (*Vault, error)
 
 func (s *SQLStore) GetVault(ctx context.Context, name string) (*Vault, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT id, name, created_at, updated_at FROM vaults WHERE name = ?"), name,
+		s.dialect.Rebind("SELECT id, name, created_at, updated_at, purpose, COALESCE(owner_user_id,'') FROM vaults WHERE name = ?"), name,
 	)
 	return s.scanVault(row)
 }
 
 func (s *SQLStore) GetVaultByID(ctx context.Context, id string) (*Vault, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT id, name, created_at, updated_at FROM vaults WHERE id = ?"), id,
+		s.dialect.Rebind("SELECT id, name, created_at, updated_at, purpose, COALESCE(owner_user_id,'') FROM vaults WHERE id = ?"), id,
 	)
 	return s.scanVault(row)
 }
 
 func (s *SQLStore) ListVaults(ctx context.Context) ([]Vault, error) {
-	rows, err := s.db.QueryContext(ctx, s.dialect.Rebind("SELECT id, name, created_at, updated_at FROM vaults ORDER BY name"))
+	rows, err := s.db.QueryContext(ctx, s.dialect.Rebind("SELECT id, name, created_at, updated_at, purpose, COALESCE(owner_user_id,'') FROM vaults ORDER BY name"))
 	if err != nil {
 		return nil, fmt.Errorf("listing vaults: %w", err)
 	}
@@ -794,7 +794,7 @@ func (s *SQLStore) ListVaults(ctx context.Context) ([]Vault, error) {
 	for rows.Next() {
 		var v Vault
 		var createdAt, updatedAt interface{}
-		if err := rows.Scan(&v.ID, &v.Name, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &createdAt, &updatedAt, &v.Purpose, &v.OwnerUserID); err != nil {
 			return nil, fmt.Errorf("scanning vault: %w", err)
 		}
 		v.CreatedAt, _ = s.dialect.ScanTime(createdAt)
@@ -805,6 +805,13 @@ func (s *SQLStore) ListVaults(ctx context.Context) ([]Vault, error) {
 }
 
 func (s *SQLStore) DeleteVault(ctx context.Context, name string) error {
+	vault, err := s.GetVault(ctx, name)
+	if err != nil {
+		return err
+	}
+	if vault.Purpose == "library" {
+		return fmt.Errorf("personal libraries cannot be deleted as group vaults")
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -839,6 +846,9 @@ func (s *SQLStore) RenameVault(ctx context.Context, oldName string, newName stri
 	v, err := s.GetVault(ctx, oldName)
 	if err != nil {
 		return err
+	}
+	if v.Purpose == "library" {
+		return fmt.Errorf("personal library names are managed natively")
 	}
 
 	res, err := s.db.ExecContext(ctx,
@@ -1192,12 +1202,12 @@ func (s *SQLStore) CreateUser(ctx context.Context, email string, passwordHash, p
 
 func (s *SQLStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT id, email, password_hash, password_salt, kdf_time, kdf_memory, kdf_threads, role, is_active, created_at, updated_at FROM users WHERE email = ?"), email,
+		s.dialect.Rebind("SELECT id, COALESCE(email,''), password_hash, password_salt, kdf_time, kdf_memory, kdf_threads, role, is_active, created_at, updated_at, auth_mode, COALESCE(installation_id,''), COALESCE(subject,''), display_name FROM users WHERE email = ? AND auth_mode='local'"), email,
 	)
 
 	var u User
 	var createdAt, updatedAt interface{}
-	if err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PasswordSalt, &u.KDFTime, &u.KDFMemory, &u.KDFThreads, &u.Role, &u.IsActive, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PasswordSalt, &u.KDFTime, &u.KDFMemory, &u.KDFThreads, &u.Role, &u.IsActive, &createdAt, &updatedAt, &u.AuthMode, &u.InstallationID, &u.Subject, &u.DisplayName); err != nil {
 		return nil, err
 	}
 	u.CreatedAt, _ = s.dialect.ScanTime(createdAt)
@@ -1263,12 +1273,12 @@ func (s *SQLStore) RegisterFirstUser(ctx context.Context, email string, password
 
 func (s *SQLStore) GetUserByID(ctx context.Context, id string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT id, email, password_hash, password_salt, kdf_time, kdf_memory, kdf_threads, role, is_active, created_at, updated_at FROM users WHERE id = ?"), id,
+		s.dialect.Rebind("SELECT id, COALESCE(email,''), password_hash, password_salt, kdf_time, kdf_memory, kdf_threads, role, is_active, created_at, updated_at, auth_mode, COALESCE(installation_id,''), COALESCE(subject,''), display_name FROM users WHERE id = ?"), id,
 	)
 
 	var u User
 	var createdAt, updatedAt interface{}
-	if err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PasswordSalt, &u.KDFTime, &u.KDFMemory, &u.KDFThreads, &u.Role, &u.IsActive, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PasswordSalt, &u.KDFTime, &u.KDFMemory, &u.KDFThreads, &u.Role, &u.IsActive, &createdAt, &updatedAt, &u.AuthMode, &u.InstallationID, &u.Subject, &u.DisplayName); err != nil {
 		return nil, err
 	}
 	u.CreatedAt, _ = s.dialect.ScanTime(createdAt)
@@ -1289,7 +1299,7 @@ func (s *SQLStore) GetUserEmailByID(ctx context.Context, id string) (string, err
 
 func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		s.dialect.Rebind("SELECT id, email, password_hash, password_salt, kdf_time, kdf_memory, kdf_threads, role, is_active, created_at, updated_at FROM users ORDER BY email"),
+		s.dialect.Rebind("SELECT id, COALESCE(email,''), password_hash, password_salt, kdf_time, kdf_memory, kdf_threads, role, is_active, created_at, updated_at, auth_mode, COALESCE(installation_id,''), COALESCE(subject,''), display_name FROM users ORDER BY email"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing users: %w", err)
@@ -1300,7 +1310,7 @@ func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var createdAt, updatedAt interface{}
-		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PasswordSalt, &u.KDFTime, &u.KDFMemory, &u.KDFThreads, &u.Role, &u.IsActive, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.PasswordSalt, &u.KDFTime, &u.KDFMemory, &u.KDFThreads, &u.Role, &u.IsActive, &createdAt, &updatedAt, &u.AuthMode, &u.InstallationID, &u.Subject, &u.DisplayName); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
 		u.CreatedAt, _ = s.dialect.ScanTime(createdAt)
@@ -1343,6 +1353,14 @@ func (s *SQLStore) UpdateUserRole(ctx context.Context, userID, role string) erro
 }
 
 func (s *SQLStore) DeleteUser(ctx context.Context, userID string) error {
+	user, err := s.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.AuthMode == "managed" {
+		_, err := s.db.ExecContext(ctx, s.dialect.Rebind("UPDATE users SET is_active=?,updated_at=? WHERE id=?"), s.dialect.BoolVal(false), s.now(), userID)
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -1527,7 +1545,7 @@ func (s *SQLStore) ListVaultMembersByType(ctx context.Context, vaultID, actorTyp
 func (s *SQLStore) ActivateUser(ctx context.Context, userID string) error {
 	nowStr := s.now()
 	res, err := s.db.ExecContext(ctx,
-		s.dialect.Rebind("UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?"),
+		s.dialect.Rebind("UPDATE users SET is_active = ?, updated_at = ? WHERE id = ? AND auth_mode='local'"),
 		s.dialect.BoolVal(true), nowStr, userID,
 	)
 	if err != nil {
@@ -2336,7 +2354,7 @@ func (s *SQLStore) scanProposalRow(rows *sql.Rows) (*Proposal, error) {
 func (s *SQLStore) scanVault(row *sql.Row) (*Vault, error) {
 	var v Vault
 	var createdAt, updatedAt interface{}
-	if err := row.Scan(&v.ID, &v.Name, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&v.ID, &v.Name, &createdAt, &updatedAt, &v.Purpose, &v.OwnerUserID); err != nil {
 		return nil, err
 	}
 	v.CreatedAt, _ = s.dialect.ScanTime(createdAt)

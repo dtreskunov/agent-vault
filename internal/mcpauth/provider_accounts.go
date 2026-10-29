@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
@@ -15,14 +16,21 @@ import (
 )
 
 func accountType(a Account) string {
-	if a.AppID != "" || a.Provider != "" {
+	if a.AppID != "" {
 		return "oauth_app"
 	}
 	return "mcp_oauth"
 }
 
 func servicePrefix(a Account) string {
-	if a.AppID != "" || a.Provider != "" {
+	if a.ConnectionID != "" {
+		key := strings.ToLower(strings.ReplaceAll(a.Key, "_", "-"))
+		if a.AppID != "" {
+			return "oauth-" + key + "-"
+		}
+		return "mcp-" + key
+	}
+	if a.AppID != "" {
 		return "oauth-" + strings.ToLower(strings.TrimPrefix(a.Key, "OAUTH_")) + "-"
 	}
 	return "mcp-" + strings.ToLower(strings.TrimPrefix(a.Key, "MCP_"))
@@ -50,6 +58,9 @@ func (m *Manager) StartAccount(ctx context.Context, vault, appID string, scopes 
 		return nil, err
 	}
 	key := "OAUTH_" + strings.ToUpper(rand.Text()[:16])
+	if identity, ok := ctx.Value(managedFlowKey{}).(managedFlowIdentity); ok {
+		key = identity.Connection
+	}
 	if replace != "" {
 		old, err := m.repo.Account(ctx, vault, replace)
 		if err != nil {
@@ -72,6 +83,9 @@ func (m *Manager) StartAccount(ctx context.Context, vault, appID string, scopes 
 	a := Account{Key: key, AppID: appID, APIHosts: slices.Clone(client.Config.APIHosts), IdentityAdapter: client.Config.Identity,
 		Issuer: client.Issuer, Metadata: client.metadata(), Client: *client, Scopes: strings.Join(unique(scopes), " "),
 		RequestedScopes: unique(scopes), ScopeSource: "requested"}
+	if identity, ok := ctx.Value(managedFlowKey{}).(managedFlowIdentity); ok {
+		a.ConnectionID = identity.Connection
+	}
 	if len(scopes) == 0 {
 		a.ScopeSource = "unknown"
 	}
@@ -92,6 +106,26 @@ func (m *Manager) startFlow(ctx context.Context, vault string, account Account, 
 	}
 	state := "mcp_oast_" + rand.Text()
 	flow := Flow{VaultID: vault, Account: account, Verifier: verifier, Nonce: rand.Text(), RedirectURI: m.config.RedirectURI, ExpiresAt: m.now().Add(10 * time.Minute)}
+	if identity, ok := ctx.Value(managedFlowKey{}).(managedFlowIdentity); ok {
+		flow.ManagedUserID, flow.ConnectionID = identity.User, identity.Connection
+		flow.Account.Key = identity.Connection
+		flow.Account.ConnectionID = identity.Connection
+		var rawScopes string
+		if err := m.repo.db.QueryRowContext(ctx, m.repo.dialect.Rebind(`SELECT c.revision,c.scopes_json FROM connections c JOIN users u ON u.id=c.owner_user_id WHERE c.id=? AND c.owner_user_id=? AND c.library_vault_id=? AND c.deleted=0 AND c.status<>'disabled' AND u.is_active=?`),
+			identity.Connection, identity.User, vault, m.repo.dialect.BoolVal(true)).Scan(&flow.ConnectionRevision, &rawScopes); err != nil {
+			return nil, failure("connection_unavailable", "The native connection owner or policy is no longer available")
+		}
+		var requested []string
+		if err := json.Unmarshal([]byte(rawScopes), &requested); err != nil {
+			return nil, err
+		}
+		if requested != nil && !slices.Equal(unique(requested), unique(flow.Account.RequestedScopes)) {
+			return nil, failure("revision_conflict", "Requested scopes changed; reload before starting consent")
+		}
+		if _, err := m.repo.db.ExecContext(ctx, m.repo.dialect.Rebind(`DELETE FROM gateway_oauth_records WHERE vault_id=? AND kind='state' AND account_key=?`), vault, identity.Connection); err != nil {
+			return nil, err
+		}
+	}
 	if len(explicit) != 0 {
 		flow.ExplicitReplace = explicit[0]
 	}

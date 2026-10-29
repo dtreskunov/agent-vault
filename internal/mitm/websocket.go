@@ -150,6 +150,8 @@ func (p *Proxy) forwardWebSocket(
 	}
 	_ = clientConn.SetWriteDeadline(time.Time{})
 	emit(http.StatusSwitchingProtocols, "")
+	stopClosing := context.AfterFunc(r.Context(), func() { _ = clientConn.Close(); _ = upstreamConn.Close() })
+	defer stopClosing()
 
 	pipeWebSocket(clientConn, clientBuf.Reader, upstreamConn, upstreamReader, wsSubs)
 }

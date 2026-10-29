@@ -45,6 +45,9 @@ func (r *Repository) put(ctx context.Context, exec executor, vault, kind, id str
 	if flow, ok := value.(*Flow); ok {
 		accountKey = flow.Account.Key
 	}
+	if client, ok := value.(*Client); ok {
+		accountKey = client.ConnectionID
+	}
 	_, err = exec.ExecContext(ctx, r.dialect.Rebind(`INSERT INTO gateway_oauth_records
 		(vault_id,kind,record_key,ciphertext,nonce,expires_at,account_key) VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(vault_id,kind,record_key) DO UPDATE SET
@@ -153,6 +156,9 @@ func (r *Repository) saveAccount(ctx context.Context, vault string, a *Account, 
 }
 
 func (r *Repository) writeAccount(ctx context.Context, tx *sql.Tx, vault string, a *Account, connect bool) error {
+	if err := r.syncConnectionAccount(ctx, tx, vault, a, connect); err != nil {
+		return err
+	}
 	if err := r.put(ctx, tx, vault, "account", a.Key, a, 0); err != nil {
 		return err
 	}
@@ -176,8 +182,14 @@ func (r *Repository) writeAccount(ctx context.Context, tx *sql.Tx, vault string,
 		return failure("credential_conflict", "MCP credential key was assigned to another credential while sign-in was pending")
 	}
 	if connect {
-		if err := r.updateServices(ctx, tx, vault, a, false); err != nil {
+		var managed int
+		if err := tx.QueryRowContext(ctx, r.dialect.Rebind(`SELECT COUNT(*) FROM connections WHERE id=? AND library_vault_id=?`), a.Key, vault).Scan(&managed); err != nil {
 			return err
+		}
+		if managed == 0 {
+			if err := r.updateServices(ctx, tx, vault, a, false); err != nil {
+				return err
+			}
 		}
 	}
 	return r.rememberTokenAuthority(ctx, tx, a.Metadata.TokenEndpoint)

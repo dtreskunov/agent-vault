@@ -60,7 +60,18 @@ func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName st
 	defer unlock()
 	account := Account{Key: accountKey(resource), ResourceURL: resource, Resource: discovery.Resource.Resource,
 		Issuer: discovery.Server.Issuer, Metadata: discovery.Server, Scopes: strings.Join(discovery.Resource.ScopesSupported, " ")}
-	if slices.Contains(discovery.Server.ScopesSupported, "openid") {
+	if identity, ok := ctx.Value(managedFlowKey{}).(managedFlowIdentity); ok {
+		account.Key = identity.Connection
+	}
+	if identity, ok := ctx.Value(managedFlowKey{}).(managedFlowIdentity); ok {
+		account.ConnectionID = identity.Connection
+		if identity.Scopes != nil {
+			if err := validScopes(identity.Scopes); err != nil {
+				return nil, err
+			}
+			account.Scopes = strings.Join(unique(identity.Scopes), " ")
+		}
+	} else if slices.Contains(discovery.Server.ScopesSupported, "openid") {
 		account.Scopes = strings.TrimSpace(account.Scopes + " openid")
 		if slices.Contains(discovery.Server.ScopesSupported, "email") {
 			account.Scopes += " email"
@@ -104,6 +115,9 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 	if err != nil {
 		return nil, err
 	}
+	if flow.ManagedUserID != "" && authorize == nil {
+		return nil, failure("managed_user_required", "Managed OAuth completion requires the initiating effective user")
+	}
 	if authorize != nil {
 		if err := authorize(flow.VaultID); err != nil {
 			return nil, err
@@ -125,6 +139,9 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, err
 	}
 	result := &oauthrelay.Result{Status: "failed", Vault: vault.Name, Key: flow.Account.Key}
+	if flow.ConnectionID != "" {
+		result.ConnectionID, result.Vault, result.Key = flow.ConnectionID, "", ""
+	}
 	if (flow.Account.Metadata.AuthorizationResponseIssParameterSupported && input.Issuer == "") ||
 		(input.Issuer != "" && input.Issuer != flow.Account.Issuer) {
 		result.Code, result.Error = "issuer_mismatch", "OAuth callback issuer is missing or does not match the sign-in"
@@ -166,20 +183,43 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 		return nil, err
 	}
 	m.resolveIdentity(ctx, a, token, flow.Nonce)
-	if err := m.mergeIdentity(ctx, flow.VaultID, a, flow.ExplicitReplace); err != nil {
-		return nil, err
+	if flow.ConnectionID == "" {
+		if err := m.mergeIdentity(ctx, flow.VaultID, a, flow.ExplicitReplace); err != nil {
+			return nil, err
+		}
+	} else {
+		old, err := m.repo.Account(ctx, flow.VaultID, a.Key)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if old != nil {
+			refresh := a.RefreshToken
+			retainAccountState(a, old)
+			if refresh == "" && (a.Subject == "" || a.Subject != old.Subject) {
+				a.RefreshToken = ""
+			}
+		}
 	}
 	now := m.now().UTC()
 	if a.ConnectedAt == nil {
 		a.ConnectedAt = &now
 	}
 	a.UpdatedAt, a.Reconnect = now, false
+	if authorize != nil {
+		if err := authorize(flow.VaultID); err != nil {
+			m.revoke(ctx, a)
+			return nil, err
+		}
+	}
 	if err := m.repo.saveAccount(ctx, flow.VaultID, a, true); err != nil {
 		m.revoke(ctx, a)
 		return nil, err
 	}
 	result.Status = "connected"
 	result.Key, result.Account = a.Key, a.Identity
+	if flow.ConnectionID != "" {
+		result.Key = ""
+	}
 	return result, nil
 }
 
@@ -195,6 +235,13 @@ func invalidClient(err error) bool {
 }
 
 func (m *Manager) reregister(ctx context.Context, vault string, account *Account) error {
+	if account.ConnectionID != "" {
+		if _, err := m.repo.db.ExecContext(ctx, m.repo.dialect.Rebind(`DELETE FROM gateway_oauth_records WHERE vault_id=? AND kind='client' AND record_key=?`), vault, digest(account.Issuer+"\x00"+account.ConnectionID)); err != nil {
+			return err
+		}
+		account.Reconnect, account.AccessToken, account.RefreshToken, account.UpdatedAt = true, "", "", m.now().UTC()
+		return m.repo.saveAccount(ctx, vault, account, false)
+	}
 	var current Client
 	err := m.repo.get(ctx, vault, "client", digest(account.Issuer), &current)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

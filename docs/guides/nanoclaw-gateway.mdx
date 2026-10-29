@@ -1,6 +1,6 @@
 ---
 title: "NanoClaw credential gateway"
-description: "Headless gateway spike on the bananaclaw fork."
+description: "Native managed users, user-owned connections and explicit group grants."
 ---
 
 ## Headless bootstrap (F10)
@@ -63,30 +63,72 @@ Content-Type: application/json
 {"name":"ag-1780956116163-prz9h2"}
 ```
 
-Set credentials, with the vault explicitly selected in the JSON body:
+Reconcile the authenticated NanoClaw user to a native non-login principal:
 
 ```http
-POST /v1/credentials HTTP/1.1
+PUT /v1/managed-users HTTP/1.1
 Host: 127.0.0.1:14321
 Authorization: Bearer <host token>
 Content-Type: application/json
 
-{"vault":"ag-1780956116163-prz9h2","credentials":{"EXAMPLE_API_KEY":"<credential value supplied by the operator>"}}
+{"installation_id":"<stable installation UUID>","subject":"<stable NanoClaw user ID>","display_name":"Example user","active":true,"role":"no-access","vault_grants":[{"vault":"ag-1780956116163-prz9h2","role":"admin"}]}
 ```
 
-Replace the vault's complete service list:
+This returns `{id,library_vault}`. Email, when supplied, is mutable metadata,
+not an identity/linking key. The same mapping is stable across host relocation.
+Role is `owner` or `no-access`; group grants are explicit `admin`/`proxy`
+memberships. Personal/system vaults cannot appear in that list. Reconciliation
+retains library-admin membership and removes stale group memberships. It may
+provision a missing group vault and the host's native group membership.
+
+Managed users have **no password material** and cannot receive human sessions,
+even if headless mode is accidentally disabled. Their personal libraries have
+native purpose/owner metadata and reject agent membership, proxy sessions and
+socket binding. Upstream standalone local-user login remains supported.
+
+Create a static connection owned by that effective native user:
 
 ```http
-PUT /v1/vaults/ag-1780956116163-prz9h2/services HTTP/1.1
+POST /v1/managed-users/<native user ID>/connections HTTP/1.1
 Host: 127.0.0.1:14321
 Authorization: Bearer <host token>
 Content-Type: application/json
 
-{"services":[{"name":"example","host":"api.example.com/v1/*","auth":{"type":"bearer","token":"EXAMPLE_API_KEY"}}]}
+{"label":"Example API","kind":"static","values":{"EXAMPLE_API_KEY":"<write-only value>"},"services":[{"name":"example","host":"api.example.com/v1/*","auth":{"type":"bearer","token":"EXAMPLE_API_KEY"}}]}
 ```
 
-PUT replaces all services, so include every service the vault should retain.
-Credential and service writes are separate requests, not one atomic update.
+The `201` response contains safe connection metadata and a quoted `revision`.
+PUT `/connections/{connection}` requires its exact `If-Match` revision and
+atomically patches values/metadata; it never reveals values or retries an
+upsert. Missing/stale revisions return `428`/`412`.
+
+Grant selected service names explicitly:
+
+```http
+PUT /v1/managed-users/<native user ID>/connections/<connection ID>/grants/ag-1780956116163-prz9h2
+If-None-Match: *
+Content-Type: application/json
+
+{"services":["example"]}
+```
+
+The effective native user must own the connection **and** administer that
+destination. Transport owner privileges are not inherited. Existing grants
+require an exact `If-Match` revision for explicit update/reapproval. Destination
+admins may detach via DELETE `/.../vaults/{vault}/access/{connection}` and list
+safe references with GET `/.../vaults/{vault}/access`.
+
+Removing access or deleting a group never deletes the source, revokes OAuth or
+removes a DCR client. Owner connection deletion is global, disables all grants
+first and reports configured upstream cleanup failures explicitly. Scope/
+identity expansion suspends grants pending reapproval. Revoked/native-disabled
+principals fail closed; restoring membership does not silently reapprove.
+
+The fork's earlier `/keys`, `/key-sets`, group `/mcp-oauth`, `/oauth-accounts`
+and app-management routes are removed globally. Native upstream standalone
+credential/service APIs remain available outside headless mode. See
+[static connections](/guides/static-keys), [MCP OAuth](/guides/mcp-oauth) and
+[OAuth apps](/guides/oauth-apps) for the canonical managed contract.
 
 Keep unmatched CONNECT targets in tunnel mode:
 
@@ -99,9 +141,17 @@ Content-Type: application/json
 {"unmatched_host_mode":"tunnel"}
 ```
 
-These calls select the vault in the body or URL; they do not require
-`X-Vault`. Check each response before continuing: vault creation returns
-`201`, and credential, service and settings writes return `200`.
+These calls select resources in the URL or body and do not require `X-Vault`.
+Check every response; do not retry mutations with stale revisions.
+
+### Revision-7 state baseline
+
+Startup validates encrypted OAuth state before TCP listeners or restored
+sockets. Populated earlier-fork group-owned credentials, OAuth records or
+pending state fail with an **offline adoption required** error. No runtime
+converter, key-resolution fallback or copy API is shipped. Preserve private
+consistent backups, gateway/host binaries, CA and socket state; perform reviewed
+ownership adoption offline and deploy the matching host/gateway/schema together.
 
 ### Bootstrap token recovery
 
@@ -132,13 +182,13 @@ environment or setting the variable to false does not re-enable reveals.
 Changing this boundary requires an explicit offline database change, not an
 owner API request.
 
-`GET /v1/credentials?reveal=true` returns
+In standalone non-headless mode `GET /v1/credentials?reveal=true` returns
 `403 {"code":"credential_reveal_disabled",...}` for every role, including
 instance owners, human sessions and scoped tokens. The same policy covers
 bulk reveals, single-key reads, OAuth access tokens and dynamic credentials.
 The decision happens before decryption or dynamic-secret resolution.
-Credential updates, key/metadata lists, OAuth status and normal proxy
-injection remain available. OAuth metadata contains only public configuration,
+Headless mode removes the generic credential CRUD routes; managed connection
+metadata and normal proxy injection remain available. OAuth metadata contains only public configuration,
 timestamps and presence sentinels, never token or client-secret values.
 
 `GET /v1/admin/settings` includes the effective `reveal_disabled` value.
@@ -230,12 +280,13 @@ change cannot silently alter an in-flight flow. Without the setting, upstream's
 `<server base URL>/v1/oauth/callback` remains the default. HTTP callbacks are
 accepted only on loopback for isolated development.
 
-NanoClaw hosts the browser callback and forwards `{state,code,iss?}` with the host
+NanoClaw hosts the browser callback and forwards `{user_id,state,code,iss?}` with the host
 bearer token to `POST /v1/oauth/complete`. The gateway returns JSON:
-`{status:"connected"|"failed",vault,key?,account?,code?,error?}`. A consent denial
-can instead forward `{state,error:"access_denied"}`. Token values never appear
-in completion responses or error messages. The caller must have member-or-admin
-access to the state's vault; a socket proxy session cannot complete a flow.
+`{connection_id,status:"connected"|"failed",account?,code?,error?}`. A consent denial
+can instead forward `{user_id,state,error:"access_denied"}`. Token values never appear
+in completion responses or error messages. `user_id` is the initiating native
+managed ID; it must still be active and own the connection before and after
+exchange. A socket proxy session or anonymous browser cannot complete a flow.
 States expire after ten minutes and can be consumed only once, including
 concurrent requests. Invalid, expired or replayed states return `400 invalid_state`.
 
@@ -243,11 +294,12 @@ concurrent requests. Invalid, expired or replayed states return `400 invalid_sta
 NanoClaw publishes it at `<UI origin>/oauth/client-metadata.json`; its `client_id`
 is that public URL, not the private gateway URL. The document advertises the
 configured callback, code/refresh grants and public-client authentication.
-The ordinary upstream browser callback remains available for non-relay use.
+The ordinary upstream browser callback remains available for native standalone
+credential OAuth, not managed connections.
 
 For MCP sign-ins, forward the callback's `iss` value unchanged. Providers that
 advertise RFC 9207 support require it to match the issuer pinned to the state.
-See [MCP OAuth](/guides/mcp-oauth) for per-vault registration, account APIs,
+See [MCP OAuth](/guides/mcp-oauth) for per-connection registration and group grants,
 resource-bound refresh and the remaining deployment acceptance.
 
 ## Telemetry and fork guard (F9)
@@ -272,6 +324,77 @@ the full suite with readonly modules, and checks the telemetry-free build.
 Run the same source-tree guard locally with `python3 scripts/check-no-ee.py`.
 
 ## Reproducible validation
+
+Focused revision-7 checks use only fresh test databases and synthetic providers:
+
+```bash
+mkdir -p .check-work
+TMPDIR="$PWD/.check-work" go test ./internal/server ./internal/store ./internal/mcpauth -run 'TestManaged' -count=1
+TMPDIR="$PWD/.check-work" go test -race ./internal/server ./internal/mcpauth ./internal/mitm -run 'TestManaged|TestSharedAuthorization' -count=1
+```
+
+They cover mapping/non-login schema enforcement, sharing, effective actors,
+scope/client suspension, both OAuth lifecycles, concurrent refresh, revocation
+during refresh, F8 binding isolation and credentialed stream termination.
+No live database, token or upstream authorization is used.
+
+### Real host-client wire bridge
+
+The opt-in Go test `TestManagedGatewayNodeBridge` starts the real canonical
+HTTP handler with a fresh native SQLite database, fresh synthetic host token
+and local synthetic OAuth authority, then executes a supplied Node script.
+Use a script importing NanoClaw's actual gateway client rather than a gateway
+mock:
+
+```bash
+mkdir -p .check-work
+TMPDIR="$PWD/.check-work" \
+AGENT_VAULT_NODE_INTEGRATION_SCRIPT="/absolute/path/to/host-wire-integration.mjs" \
+go test ./internal/server -run '^TestManagedGatewayNodeBridge$' -count=1 -timeout=90s -v
+```
+
+For a dependency-free bridge smoke test, select
+`"$PWD/internal/server/testdata/managed-gateway-client.mjs"` instead.
+That fixture verifies real HTTP callback/grant/access responses; the external
+host script is what verifies NanoClaw's actual client implementation.
+For a TypeScript script, set `AGENT_VAULT_NODE_INTEGRATION_RUNNER` to the
+existing `node_modules/.bin/tsx` executable; no dependency installation is needed.
+NanoClaw's host script receives `NANOCLAW_TEST_GATEWAY_URL` and
+`NANOCLAW_TEST_GATEWAY_TOKEN_FILE` directly.
+
+The child receives these environment variables, prefixed
+`AGENT_VAULT_TEST_`:
+
+| Suffix | Value |
+| --- | --- |
+| `URL`, `TOKEN_FILE` | Ephemeral HTTP gateway and mode-0600 synthetic token file beneath the child's `TMPDIR` |
+| `USER_ID`, `LIBRARY_VAULT` | Native mapped owner ID and personal library name |
+| `INSTALLATION_ID`, `SUBJECT` | Stable synthetic source identity (`install`, `owner`); **not** callback `user_id` |
+| `CONNECTION_ID`, `STATE`, `CODE`, `ISSUER` | Seeded OAuth-app connection and parent-style callback values |
+| `VAULT`, `OTHER_VAULT`, `APP_ID` | Native group names and the user's configured test app |
+| `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET` | Synthetic app configuration for optional additional host-client calls |
+| `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_REVOCATION_URL` | Local synthetic provider endpoints |
+| `WORKSPACE` | Fresh isolated child working directory |
+
+`AGENT_VAULT_ADDR`, `AGENT_VAULT_TOKEN_FILE` and
+`AGENT_VAULT_BOOTSTRAP_TOKEN_FILE` are also redirected to the fixture.
+No token values are passed in the environment. The child gets a fresh cwd/HOME/XDG state,
+not the production environment or credentials. Scripts are bounded to 60
+seconds and must exit without leaving children. The test shuts down listeners
+and removes its test data.
+
+The external script must exercise the real managed-user HTTP API. Optional
+`AGENT_VAULT_NODE_VERIFY_CALLBACK=true` additionally requires it to complete the
+seeded connection with
+`POST /v1/oauth/complete {state,code,iss?,error?,user_id:<USER_ID>}` and leave
+that connection ready. It may start a newer flow for the same connection
+instead of consuming the seed state. Go checks the resulting native owner and
+connection state when requested, and always rejects unexpected upstream
+revocation. The separate `TestManagedOAuthCompleteParentPayloadUsesNativeID`
+checks successful consent and provider denial. A NanoClaw
+subject in `user_id`, or an omitted `user_id`, returns `403` without consuming
+the flow. Successful consent and provider-decline responses both return the
+exact pending `connection_id`, never a vault credential key.
 
 ```bash
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o agent-vault .

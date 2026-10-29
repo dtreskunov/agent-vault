@@ -89,6 +89,18 @@ description: "Complete reference for all Agent Vault CLI commands."
   </Accordion>
 </AccordionGroup>
 
+## Host-client integration testing
+
+The opt-in Go test `TestManagedGatewayNodeBridge` uses
+`AGENT_VAULT_NODE_INTEGRATION_SCRIPT` to select an external host-client script,
+optional `AGENT_VAULT_NODE_INTEGRATION_RUNNER` to select an existing runner
+(default `node`, or an existing `tsx` executable), and optional
+`AGENT_VAULT_NODE_VERIFY_CALLBACK=true` to require completion of its seeded OAuth
+flow. These are test-only variables, not server/CLI configuration. The bridge
+generates `AGENT_VAULT_TEST_*` and `NANOCLAW_TEST_GATEWAY_*` fixture metadata,
+including token-file paths but never token environment values.
+See the [bounded real-wire test command](/guides/nanoclaw-gateway#real-host-client-wire-bridge).
+
 ## Database migration
 
 <AccordionGroup>

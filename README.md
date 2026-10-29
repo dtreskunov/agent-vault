@@ -68,18 +68,22 @@ are write-only for every role, including the host owner agent.
 Telemetry is off by default; build with `-tags notelemetry` to exclude it.
 NanoClaw can host OAuth callbacks while the gateway stays private; configure
 `AGENT_VAULT_OAUTH_REDIRECT_URL` and relay completion over the authenticated API.
-[MCP OAuth](docs/guides/mcp-oauth.mdx) adds per-vault dynamic registration,
-PKCE/resource-bound tokens, refresh and automatic socket-proxy injection.
-[OAuth apps](docs/guides/oauth-apps.mdx) support generic install-wide clients,
-vault overrides and vault-local API accounts. Exact HTTPS API-host routing
-selects the credential; providers enforce OAuth permissions, not a gateway
-scope/path catalog. Existing provider accounts migrate atomically before
-listeners start, preserving keys and tokens. This intentionally expands old
-path-scoped rules to whole hosts; conflicts stop startup. Upgrade NanoClaw and
-Agent Vault together after a state backup; rollback requires the matching
-pre-upgrade state and binaries, not a binary-only downgrade.
-[Static key APIs](docs/guides/static-keys.mdx) support atomic key/destination
-updates, safe per-service edits and coalesced usage timestamps.
+Native non-login users map uniquely from `(installation_id, subject)` and own
+personal library vaults. [Static sets](docs/guides/static-keys.mdx),
+[MCP OAuth](docs/guides/mcp-oauth.mdx) and
+[OAuth apps](docs/guides/oauth-apps.mdx) are user-owned connections shared with
+groups through explicit service grants, not copied group credentials. Group
+sockets cannot bind personal libraries. The host authenticates transport;
+designated managed APIs enforce the effective native user's authority.
+OAuth refresh/client state is central per connection. Detaching or deleting a
+group never revokes upstream tokens. Scope/identity expansion suspends grants
+until explicit reapproval. Revocation is rechecked on every use and closes
+long-lived credentialed operations.
+Earlier fork group-owned state is rejected before listeners with an
+offline-adoption-required error; startup never converts it. Upgrade NanoClaw,
+gateway and reviewed state together. Rollback requires matching state and
+binaries, not a binary-only downgrade. Upstream local-user/non-headless
+credential APIs remain supported; managed users never acquire human sessions.
 [OAuth token stubs](docs/guides/oauth-token-stubs.mdx) keep real provider
 tokens out of stdio MCP client configuration.
 [Gateway releases](docs/guides/gateway-releases.mdx) use one reproducible build

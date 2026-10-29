@@ -52,6 +52,13 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 		proxyError(w, http.StatusInternalServerError, "internal", "Failed to parse broker services")
 		return
 	}
+	shared, sharedKeys, err := s.sharedDiscovery(ctx, ns.ID)
+	if err != nil {
+		jsonError(w, 500, "Shared discovery failed")
+		return
+	}
+	svcList = append(svcList, shared...)
+	credentialKeys = append(credentialKeys, sharedKeys...)
 	// MarshalJSON persists Host in joined form; re-split so
 	// MatcherPattern emits the same shape regardless of storage form.
 	for i := range svcList {

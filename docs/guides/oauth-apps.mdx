@@ -1,226 +1,62 @@
 ---
-title: "OAuth apps and API accounts"
-description: "Generic OAuth clients, vault-local authorizations and API-host routing."
+title: "Managed OAuth apps and API connections"
+description: "Generic install/user clients with connection-pinned authorization."
 ---
 
-An **app** is reusable OAuth client configuration. An **account** is a
-vault-local authorization issued through that app. Sharing an install-wide
-client never shares account tokens between vaults.
+OAuth apps are generic configuration, not a provider/scope-set catalog.
+Transport authenticates as `nanoclaw-host`; every operation explicitly selects
+an active native managed user whose own roles/memberships are enforced.
 
-Configure `AGENT_VAULT_OAUTH_REDIRECT_URL` and keep
-`AGENT_VAULT_REVEAL_DISABLED=true`. Management calls use the host agent bearer
-token. Client secrets and account tokens are never returned.
+| API | Authorization |
+| --- | --- |
+| `GET /v1/managed-users/{user}/oauth-apps` | Effective user; returns `{items:AppInfo[]}` |
+| `PUT /v1/managed-users/{user}/oauth-apps/{app}?scope=user` | Effective user's private library |
+| `DELETE` on the same URL | Effective user's private library |
+| `PUT` / `DELETE` with `scope=install` | Effective native instance **owner**, not transport owner |
 
-There is no OAuth provider catalog or scope-set-to-path permission layer.
-Configure exact API hosts; the provider enforces the token's scopes and account
-permissions. The unrelated static-service template catalog is unchanged.
+Omitted scope means `user`. App IDs are canonical slugs. PUT accepts native raw
+`AppInput`: `issuer`, `client_id`, write-only `client_secret`, `label`,
+`authorization_endpoint`, `token_endpoint`, `token_endpoint_auth_method`,
+`api_hosts`, `default_scopes`, `authorization_params`, `revocation_endpoint`,
+`identity`, `jwks_uri`, and `token_scope_separator`. Auth method `none` is
+public-client mode; confidential identity changes require a supplied secret.
 
-## App configuration and discovery
+`AppInfo` retains flattened public app configuration plus `id`, `source`
+(`user` or `install`), `client_secret_set`, `overrides_install`, `updated_at` and
+safe usage counts. Secret values are never returned. A same-ID user config can
+override an install config, but a connection pins its actual issuing source and
+client. Secret-only rotation updates that central pinned client; identity
+changes or app deletion mark affected connections `needs_reconnect` and suspend
+their grants without silently transferring authorization.
 
-| Scope | Routes | Permission |
-| --- | --- | --- |
-| Install | `GET /v1/oauth-apps`, `GET/PUT/DELETE /v1/oauth-apps/{app_id}` | Instance owner |
-| Vault | `GET /v1/vaults/{vault}/oauth-apps`, `GET/PUT/DELETE /v1/vaults/{vault}/oauth-apps/{app_id}` | Member for reads, admin for writes |
+## Connect an API account
 
-Collection responses are `{items:[...]}`. IDs are arbitrary canonical slugs;
-`google` and `github` are ordinary IDs, not provider enums. Vault reads return
-effective configuration: same-ID vault overrides hide install apps. Results
-identify `source:"install"|"vault"` and `overrides_install`. Vault PUT/DELETE
-only modifies the override; deleting it exposes the install configuration for
-future sign-ins, without changing accounts issued through that install app.
+```http
+POST /v1/managed-users/{user}/connections
+Content-Type: application/json
 
-Example confidential GitHub app configuration:
-
-```json
-{
-  "label": "GitHub",
-  "issuer": "https://github.com/login/oauth",
-  "authorization_endpoint": "https://github.com/login/oauth/authorize",
-  "token_endpoint": "https://github.com/login/oauth/access_token",
-  "token_endpoint_auth_method": "client_secret_post",
-  "client_id": "<OAuth application client ID>",
-  "client_secret": "<operator-supplied secret>",
-  "api_hosts": ["api.github.com"],
-  "default_scopes": ["repo"],
-  "identity": "github",
-  "token_scope_separator": "comma"
-}
+{"label":"My API account","kind":"oauth_app","app_id":"my-app","scopes":["read"]}
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `issuer`, `client_id` | Required on creation |
-| `client_secret` | Write-only; required for confidential clients and changed bindings |
-| `token_endpoint_auth_method` | `none`, `client_secret_post` (default), or `client_secret_basic` |
-| `authorization_endpoint`, `token_endpoint` | Configure together for direct API sign-in |
-| `api_hosts` | Exact DNS hosts, optionally with a port; no wildcards, paths or URL schemes |
-| `default_scopes` | Actual OAuth scope strings; default `[]` |
-| `authorization_params` | Optional additional authorization parameters |
-| `revocation_endpoint` | Optional RFC 7009 endpoint |
-| `identity` | `none` (default), `oidc`, `google`, or `github` |
-| `jwks_uri` | Required with `identity:"oidc"` |
-| `token_scope_separator` | `space` (default) or `comma` for scope responses |
-| `label` | Display label; defaults to app ID |
+Start consent using `POST /.../connections/{connection}/oauth/start` with
+`{scopes?}`. Omitted scopes use defaults; `[]` requests no scopes. Complete
+through the authenticated relay with `user_id,state,code,iss?`; the response
+names `connection_id`, not an account key. See [MCP OAuth](/guides/mcp-oauth)
+for callback binding, PKCE, synthetic SDK handles and central refresh behavior.
 
-OAuth URLs require HTTPS except on loopback. Network restrictions still apply.
-API hosts are not inferred from issuer: an authorization host is often not an
-API host. MCP-only apps can omit OAuth endpoints and API hosts because MCP
-discovery supplies resource-specific endpoint metadata.
+Resulting API services cover every HTTPS path at the exact configured API hosts.
+Provider tokens enforce permissions; the gateway does not infer a provider
+permission catalog or merge authorizations based on email/subject. Metadata
+reports requested/granted scopes, provenance and verified account labels when
+available. Identity lookup failure leaves account metadata null.
 
-Omitted update fields retain their values. Empty arrays clear defaults; optional
-string fields can be cleared with `""` where valid. A public client uses
-`token_endpoint_auth_method:"none"` with no secret. To change a confidential
-client to public, the old secret is discarded; a supplied nonempty secret is
-rejected. Empty confidential secrets fail.
+Explicit connection-service grants attach references to group vaults. Owners
+must also be native destination admins; recipients cannot retarget or reshare.
+Authority expansion suspends grants until reviewed reapproval. A group
+detachment/deletion never revokes provider tokens. Global owner connection
+deletion disables recipients first and reports configured upstream cleanup
+failures explicitly.
 
-Reads and PUT responses expose safe configuration, `client_secret_set`,
-`updated_at`, and applicable `accounts` counts. Install-owner responses also
-include `accounts_all_vaults`; vault responses never expose other vaults'
-counts. Missing apps return `404`; successful deletion returns `204`.
-
-### Authorization options and identity
-
-For Google offline and incremental authorization, explicitly configure:
-
-```json
-{
-  "default_scopes": ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
-  "authorization_params": {
-    "access_type": "offline",
-    "include_granted_scopes": "true",
-    "prompt": "consent"
-  },
-  "identity": "google"
-}
-```
-
-Choose scopes and API hosts for your integration, such as
-`gmail.googleapis.com` and `www.googleapis.com`. There are no hidden scope
-additions. Authorization parameters cannot override state, client ID, redirect,
-response type, scope, nonce, PKCE or resource bindings, contain credential
-parameters, or provide an alternate authorization request object.
-
-The Google/GitHub identity verifiers require their expected issuer. They are
-identity adapters, not permission catalogs. OIDC verifies signed ID tokens
-against the configured issuer, client and JWKS, including nonce/audience checks.
-Identity lookup failures warn but do not fail an otherwise valid sign-in;
-`account` remains null. Stable subjects stay encrypted and private.
-
-### App lifecycle
-
-Apps are encrypted at rest. Accounts pin their issuing app ID/source, client,
-OAuth endpoints, identity configuration and API hosts. Refresh never selects a
-newly preferred vault override.
-
-Changing issuer, client ID, authorization/token endpoints or token-auth method
-invalidates accounts and pending sign-ins issued by that exact app source.
-Changing a confidential binding requires a supplied secret; existing secrets
-are not silently sent to a different endpoint. Deleting an app disconnects only
-its issued accounts. Remote revocation is best-effort; local changes are atomic.
-
-Secret-only rotation retains accounts and updates their pinned secret.
-Label, default scopes, authorization options, identity settings and API-host
-changes apply to new/replacement sign-ins, not existing pinned accounts.
-
-## API accounts
-
-| Action | Route |
-| --- | --- |
-| Start | `POST /v1/vaults/{vault}/oauth-accounts/start {app_id,scopes?,replace_key?}` |
-| Complete | `POST /v1/oauth/complete {state,code,iss?}` |
-| List | `GET /v1/vaults/{vault}/oauth-accounts` |
-| Disconnect | `DELETE /v1/vaults/{vault}/oauth-accounts/{key}` |
-
-Start and DELETE require vault admin; listing requires member. Omitted
-`scopes` uses app defaults; `[]` explicitly requests no scopes. Legacy
-`provider`/`scope_sets` request fields are rejected. Direct API sign-in requires
-configured OAuth endpoints and at least one API host.
-
-Start returns `{state,authorize_url}`. Open it in the browser and relay the
-callback as described in [MCP OAuth](/guides/mcp-oauth). Completion preserves
-`{status,vault,key?,account?,code?,error?}`. Always use its authoritative key.
-
-Lists include `kind:"oauth_app"`, `app_id`, `app_source`, `issuer`,
-`requested_scopes`, nullable `granted_scopes`, effective `scopes`, `scope_source`,
-`api_hosts`, nullable verified `account`, existing timestamps, status, and
-`client:"app"`. Reported scopes replace effective metadata; they are never
-blindly unioned with old requested scopes. If initial exchange omits scope,
-requested scopes are the protocol assumption (`scope_source:"requested"`) and
-`granted_scopes` is null. An omitted refresh scope preserves existing metadata.
-Migrated scope provenance is marked `legacy`, not presented as verified grants.
-
-The same verified subject reuses its key only inside the same vault, issuer and
-issuing-app binding. Explicit replacement retains its selected key. An existing
-refresh token is retained when a legitimate reconnect omits a replacement and
-the issuing binding is unchanged.
-
-### Host-wide routing
-
-Completion atomically stores account, encrypted token and generated `oauth-*`
-bearer services. Routes cover **every path** on each exact API host, using HTTPS
-and port 443 by default (or an explicit HTTPS port). Generated services expose
-`https_only:true`; plaintext forwarding is rejected. Path matching does not
-depend on selected scopes. GitHub `/user`, `/user/repos`, searches, repository
-routes and other API operations all receive the account token at
-`api.github.com`; GitHub decides whether each operation is permitted.
-
-Overlapping account recipients or static/MCP routes in the same vault fail with
-`409 service_conflict`. Subsequent static/service edits cannot shadow an account
-route either. There is no implicit same-host multi-account selection.
-Different vaults may independently use the same API host. Unrelated services
-remain intact. Disconnect removes all generated routes for that account.
-
-## MCP app selection
-
-MCP probe/start can specify `app_id`, which must match the discovered issuer.
-Without an explicit ID, DCR retains preference; otherwise a unique effective
-configured app matching the issuer is used, followed by CIMD when supported.
-Multiple matching apps return `409 ambiguous_app`, not first-match selection.
-Probe reports `issuer` and selected `app_id`, not a catalog provider hint.
-MCP accounts remain scoped to their resource endpoint and descendants.
-
-## Coordinated upgrade and rollback
-
-This is a breaking, coordinated Agent Vault/NanoClaw release. There is no
-capability negotiation or older-client adapter. `/v1/oauth/providers` is removed;
-NanoClaw must use app collections and actual OAuth scopes.
-
-Before any listener or restored socket session serves traffic, a versioned
-internal migration replaces legacy provider-account path rules with exact
-HTTPS host routes. Hosts come from each account's owned generated services,
-not inferred from issuer or old scope sets. **This intentionally expands
-destination routing to entire hosts**, including former issues-only accounts.
-Provider permissions remain unchanged; migration never requests consent.
-
-The migration preserves keys, token values, identities, scopes, timestamps and
-issuing-app associations. Credential ciphertext is unchanged. Account/app
-envelopes are re-encrypted to add generic metadata. Unrelated static/MCP services
-and app sources survive. The migration is atomic and repeating it is a no-op.
-Ownership inconsistencies or overlapping recipients abort startup explicitly.
-The SQLite-to-Postgres migration utility also copies encrypted OAuth records
-and the persistent token-authority registry without decrypting them.
-
-Stored account metadata supplies endpoints; migration makes no provider calls.
-Unused apps lacking endpoint metadata remain MCP-only until configured.
-Legacy Google authorization options and identity adapters are retained.
-Incomplete legacy provider sign-ins are expired and must be started again;
-connected accounts do not require reauthorization.
-
-For an approved deployment:
-
-1. Validate on copied isolated state; resolve reported conflicts through the
-   old release's supported account/static-service APIs before retrying.
-2. Stop all instances and take a consistent database/state backup, retaining
-   the previous pinned binary. Do not mix old/new binaries against one database.
-3. Upgrade Agent Vault and NanoClaw together. Preserve master-password input,
-   bootstrap token file, database, CA, socket root, network allowlist, redirect,
-   headless/reveal-disabled settings and unmatched-host tunnel mode.
-4. Verify startup succeeds, account keys/labels remain unchanged, scoped
-   `/user` and approved metadata requests authenticate, and F8 stays synthetic.
-   Do not enumerate private repositories without operator approval.
-5. To roll back, stop the new release and restore the matching pre-upgrade
-   state backup with the previous binaries. Binary-only rollback is unsupported.
-
-The [gateway release process](/guides/gateway-releases) still requires its exact
-build tags and validation. Publishing or replacing the live canary requires
-separate approval.
+Earlier `/v1/oauth-apps`, group `/oauth-apps`, `/oauth-accounts` and key-based
+headless account APIs are removed, not negotiated aliases. Upstream native
+non-headless local-user credential OAuth remains independent and supported.

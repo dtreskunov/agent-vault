@@ -131,6 +131,11 @@ func Wrap(next http.Handler) http.Handler {
 		for _, part := range strings.Split(path, "/") {
 			disabled = disabled || part == "auth" || part == "users" || part == "invites" || part == "email"
 		}
+		if !strings.HasPrefix(path, "/v1/managed-users") {
+			for _, part := range strings.Split(path, "/") {
+				disabled = disabled || part == "credentials" || part == "services" || part == "keys" || part == "key-sets" || part == "oauth-apps" || part == "accounts" || part == "mcp-oauth" || part == "proposals"
+			}
+		}
 		if disabled {
 			http.NotFound(w, r)
 			return

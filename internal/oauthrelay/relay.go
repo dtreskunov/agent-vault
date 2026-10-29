@@ -64,6 +64,7 @@ type Store interface {
 }
 
 type Input struct {
+	UserID string `json:"user_id,omitempty"`
 	State  string `json:"state"`
 	Code   string `json:"code"`
 	Issuer string `json:"iss,omitempty"`
@@ -71,12 +72,13 @@ type Input struct {
 }
 
 type Result struct {
-	Status  string  `json:"status"`
-	Vault   string  `json:"vault"`
-	Key     string  `json:"key,omitempty"`
-	Account *string `json:"account,omitempty"`
-	Code    string  `json:"code,omitempty"`
-	Error   string  `json:"error,omitempty"`
+	ConnectionID string  `json:"connection_id,omitempty"`
+	Status       string  `json:"status"`
+	Vault        string  `json:"vault,omitempty"`
+	Key          string  `json:"key,omitempty"`
+	Account      *string `json:"account,omitempty"`
+	Code         string  `json:"code,omitempty"`
+	Error        string  `json:"error,omitempty"`
 }
 
 func Hash(state string) string {

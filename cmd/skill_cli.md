@@ -26,76 +26,53 @@ If an API call fails with 401 or 403, you can request access by creating a propo
 
 ## When to use this
 
-OAuth completion and account lists return `account` only from an authenticated
-provider identity API or a fully signature-verified OIDC ID token. Identity
-failure leaves it null without failing sign-in. Stable subjects are private.
-Repeated sign-in with the same verified subject reuses the account key only
-inside the same vault, issuer and issuing-app binding, unless `replace_key`
-explicitly selects a target. Reported OAuth scopes are authoritative, never
-blindly unioned with earlier requested scopes.
+In NanoClaw headless mode, agents cannot create proposals or administer
+credentials. Ask the user to manage **Credentials**, then explicitly grant the
+connection's selected services to the group's **Access** references. There is
+no credential-copy API or group-owned credential-management fallback.
 
-For stdio MCP OAuth clients, configure `av-refresh:<provider account key>`
-as the refresh token and `av-access:<key>` as the access token. The gateway
-intercepts persistently known token authorities independently of the caller's
-vault and answers exact account-pinned token-endpoint refreshes synthetically
-only for that vault's connected account. Unknown/disconnected, wrong-endpoint
-and cross-vault placeholders are rejected locally at known authorities.
-Unknown blindly tunnelled hosts are not inspected. Synthetic responses never
-contact the provider; real refresh/injection happens on the API request.
+The host alone may reconcile native non-login users through
+`PUT /v1/managed-users {installation_id,subject,display_name?,email?,active,role,vault_grants}`.
+The stable identity is `(installation_id,subject)`, never email. The response is
+`{id,library_vault}`. Personal libraries cannot bind group sockets.
 
-For static keys, the host can use
-`PUT /v1/vaults/{vault}/keys/{KEY} {value?,service}` to update a key and
-its single destination atomically, or DELETE that same URL. Per-service
-PUT/DELETE uses `/v1/vaults/{vault}/services/{name}`; generated `mcp-*`
-and `oauth-*` services are protected. Credential lists include `updated_at`
-and nullable, coalesced `last_used_at`.
+Designated host APIs select that native user in
+`/v1/managed-users/{user}/connections`: GET lists owned metadata, POST creates
+`{label,kind,services?,values?,resource_url?,app_id?,scopes?}` where kind is
+`static`, `mcp_oauth` or `oauth_app`. Individual GET/PUT/DELETE uses
+`/connections/{connection}`. PUT requires the exact quoted connection revision
+in `If-Match`; missing/stale preconditions return `428`/`412`, not an upsert.
+All secret values stay write-only.
 
-OAuth apps use `GET|PUT|DELETE /v1/oauth-apps/{app_id}` (owner) or
-`/v1/vaults/{vault}/oauth-apps/{app_id}` (member reads, admin writes).
-Collection GETs at `/v1/oauth-apps` and `/v1/vaults/{vault}/oauth-apps`
-return `{items:[...]}` with effective install/vault configuration and source.
-App IDs are arbitrary slugs, not a provider enum. Configure issuer, client ID,
-write-only secret, token auth method, authorization/token endpoints, exact
-API hosts, optional default scope strings, authorization options and identity
-verification. Public clients use auth method `none`; confidential binding
-changes require a supplied secret. No OAuth catalog endpoint exists.
-API-account sign-in starts at
-`POST /v1/vaults/{vault}/oauth-accounts/start {app_id,scopes?,replace_key?}`.
-Omitted scopes uses app defaults; `[]` requests no scopes. `scope_sets` is not
-supported. API hosts select credentials for every HTTPS path; the provider
-enforces token permissions. Overlapping recipients in one vault fail explicitly.
-List/disconnect use `/v1/vaults/{vault}/oauth-accounts[/{key}]`.
-Lists expose requested/granted/effective scopes and their provenance, API
-hosts and issuing-app source, never tokens or private identity subjects.
-Changing an app's client binding or deleting it disconnects only its issued
-accounts. Other configuration affects new sign-ins; existing accounts pin
-their endpoints, API hosts and issuing source. Secret-only rotation retains
-accounts. There is no capability negotiation or old catalog API adapter.
+Explicit sharing uses PUT `/connections/{connection}/grants/{vault}`
+`{services:[<connection service names>]}`. The effective user must own the
+connection and administer the destination natively; host owner privileges do
+not transfer. Existing grants need exact `If-Match` for reapproval/update.
+Owner or destination admin may DELETE the grant. Access list/detach uses
+`/v1/managed-users/{user}/vaults/{vault}/access[/{connection}]`.
+Detachment and group deletion never revoke upstream or delete source material.
 
-NanoClaw hosts can complete public OAuth redirects with
-`POST /v1/oauth/complete {state,code,iss?}` using their agent bearer token.
-Completion returns `{status,vault,key?,account?,code?,error?}`, never token
-values. States are single-use and expire after ten minutes. Public client
-metadata comes from `GET /v1/oauth/client-metadata`; NanoClaw republishes it at
-its UI origin's `/oauth/client-metadata.json`.
+Both OAuth kinds start at `/connections/{connection}/oauth/start` with
+`{resource_url?,app_id?,scopes?}` and return `{state,authorize_url}`.
+The host completes at `POST /v1/oauth/complete {user_id,state,code,iss?}`.
+Completion returns `{connection_id,status,account?,code?,error?}` with no
+credential key or token. State pins the initiating native user/connection,
+issuer, resource, client, redirect and PKCE verifier; ownership is rechecked
+after exchange. There is no automatic account merge or scope union. Scope/
+identity expansion suspends recipients pending reviewed reapproval.
 
-For MCP OAuth, the host probes/starts sign-in with
-`POST /v1/vaults/{vault}/mcp-oauth/probe` or `/start`, body `{resource_url,app_id?}`.
-Start returns `{state,authorize_url}`. Forward the public callback's `iss`
-unchanged; providers advertising RFC 9207 require it. List metadata with
-`GET /v1/vaults/{vault}/mcp-oauth` and disconnect with
-`DELETE /v1/vaults/{vault}/mcp-oauth/{key}`. Start/delete require vault admin;
-list/probe require member. Dynamic clients and tokens are isolated per vault.
-Configured apps are selected by discovered issuer, with explicit `app_id`
-required for ambiguous matches. MCP routing stays resource-scoped even if
-the same app configures direct API hosts. A `needs_reconnect` account requires a new human sign-in, not a
-credential reveal or repeated registration by the container.
+OAuth apps use GET `/v1/managed-users/{user}/oauth-apps` and PUT/DELETE
+`/oauth-apps/{app}?scope=user|install`. Only an effective native owner may
+manage install apps. Metadata exposes generic config and source, never secrets.
+There is no provider catalog or group-owned app/account API.
 
-In the NanoClaw headless gateway, credential values are write-only.
-`GET /v1/credentials?reveal=true` (including single-key reads) returns
-`403 credential_reveal_disabled` even for instance owners. Key/metadata lists
-and proxy injection remain available; add or replace values through the host's
-credential settings rather than trying to retrieve them.
+For stdio SDKs use `av-refresh:<BIND_... handle>` and
+`av-access:<BIND_... handle>` from the group's authorized access metadata,
+never a library key. Synthetic refresh is group-binding and exact-endpoint
+scoped; real refresh/client state is central per connection. Unknown, revoked,
+suspended and copied cross-group handles are rejected on intercepted routes.
+Unknown blindly tunnelled hosts remain uninspected. Containers never register
+clients, reveal tokens or complete consent themselves.
 
 NanoClaw gateway hosts can manage proxy identities with `POST /v1/socket-sessions`
 (`{vault,label,dir}`), `GET /v1/socket-sessions` (`{items:[...]}`), and
