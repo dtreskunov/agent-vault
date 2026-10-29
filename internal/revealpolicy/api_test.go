@@ -95,6 +95,9 @@ func TestAllRolesHaveWriteOnlyCredentials(t *testing.T) {
 				var user *store.User
 				user, err = db.CreateUser(ctx, fmt.Sprintf("user-%d@example.com", i), []byte("hash"), []byte("salt"), "member", 1, 1024, 1)
 				if err == nil {
+					err = db.ActivateUser(ctx, user.ID)
+				}
+				if err == nil {
 					err = db.GrantVaultRole(ctx, user.ID, "user", vault.ID, role)
 				}
 				if err == nil {
