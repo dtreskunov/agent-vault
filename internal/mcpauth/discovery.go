@@ -133,16 +133,8 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 	if err := validateURL(issuer); err != nil {
 		return nil, err
 	}
-	u, _ := url.Parse(issuer)
-	base := u.Scheme + "://" + u.Host
-	issuerPath := strings.TrimSuffix(u.EscapedPath(), "/")
-	candidates := []string{
-		base + "/.well-known/oauth-authorization-server" + issuerPath,
-		base + "/.well-known/openid-configuration" + issuerPath,
-		strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration",
-	}
 	var metadata *oauthex.AuthServerMeta
-	for _, endpoint := range slices.Compact(candidates) {
+	for _, endpoint := range authorizationMetadataURLs(issuer) {
 		metadata, err = oauthex.GetAuthServerMeta(ctx, endpoint, issuer, m.client)
 		if err != nil {
 			return nil, failure("discovery_failed", "Authorization-server metadata validation failed")

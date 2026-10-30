@@ -86,6 +86,7 @@ func (s *Server) connectionSQL() (*sql.DB, store.Dialect) {
 
 func (s *Server) registerManaged(mux *http.ServeMux, wrap func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("PUT /v1/managed-users", wrap(s.handleManagedReconcile))
+	mux.HandleFunc("POST /v1/managed-users/{user}/oauth/scopes", wrap(s.handleManagedScopeOptions))
 	mux.HandleFunc("GET /v1/managed-users/{user}/connections", wrap(s.handleConnectionsList))
 	mux.HandleFunc("POST /v1/managed-users/{user}/connections", wrap(s.handleConnectionCreate))
 	mux.HandleFunc("GET /v1/managed-users/{user}/connections/{connection}", wrap(s.handleConnectionGet))

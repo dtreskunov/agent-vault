@@ -81,6 +81,11 @@ This does not change the group's explicitly authorized runtime use.
 Managed OAuth sign-in accepts a validated `client_name` from the trusted host
 for DCR consent display. Registrations remain isolated by connection ID even
 when their friendly names are identical.
+Managed scope inspection reads resource/issuer metadata without registering a
+client or changing OAuth state. Resource-advertised scopes take precedence over
+authorization-server options; missing metadata is not an implicit permission
+grant. Scope policy comparison treats values as sets while preserving the
+difference between unspecified and explicitly empty requests.
 OAuth refresh/client state is central per connection. Detaching or deleting a
 group never revokes upstream tokens. Scope/identity expansion suspends grants
 until explicit reapproval. Revocation is rechecked on every use and closes

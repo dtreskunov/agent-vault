@@ -11,6 +11,35 @@ import (
 	"github.com/Infisical/agent-vault/internal/oauthrelay"
 )
 
+func (s *Server) handleManagedScopeOptions(w http.ResponseWriter, r *http.Request) {
+	a := s.effectiveManaged(w, r)
+	if a == nil {
+		return
+	}
+	if s.mcpOAuth == nil {
+		jsonError(w, 503, "OAuth unavailable")
+		return
+	}
+	var in struct {
+		ResourceURL string `json:"resource_url"`
+		AppID       string `json:"app_id"`
+		Issuer      string `json:"issuer"`
+	}
+	if !decodeManaged(w, r, &in) {
+		return
+	}
+	library, err := s.managedLibrary(r.Context(), a.ID)
+	if err != nil {
+		jsonError(w, 500, "Personal library unavailable")
+		return
+	}
+	options, err := s.mcpOAuth.DiscoverScopes(r.Context(), library.ID, in.ResourceURL, in.AppID, in.Issuer)
+	if s.mcpError(w, err) {
+		return
+	}
+	jsonOK(w, options)
+}
+
 func (s *Server) handleConnectionOAuthStart(w http.ResponseWriter, r *http.Request) {
 	a, c := s.ownedConnection(w, r)
 	if c == nil {
@@ -48,7 +77,15 @@ func (s *Server) handleConnectionOAuthStart(w http.ResponseWriter, r *http.Reque
 	if scopes == nil {
 		scopes = c.RequestedScopes
 	}
-	if !reflect.DeepEqual(scopes, c.RequestedScopes) {
+	scopes, err := mcpauth.CanonicalScopes(scopes)
+	if s.mcpError(w, err) {
+		return
+	}
+	previous, err := mcpauth.CanonicalScopes(c.RequestedScopes)
+	if s.mcpError(w, err) {
+		return
+	}
+	if !reflect.DeepEqual(scopes, previous) {
 		unlock, err := s.store.LockVault(r.Context(), "connection-policy")
 		if err != nil {
 			jsonError(w, 500, "Policy lock unavailable")

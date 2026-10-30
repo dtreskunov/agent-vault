@@ -14,6 +14,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/gatewaytest"
 	"github.com/Infisical/agent-vault/internal/mcpauth"
+	"github.com/Infisical/agent-vault/internal/store"
 )
 
 type managedOAuthProvider struct {
@@ -79,6 +80,46 @@ func TestManagedOAuthClientNameValidation(t *testing.T) {
 		if err != nil || latest.sourceRevision != before.sourceRevision {
 			t.Fatal("invalid client name changed connection policy", err)
 		}
+	}
+}
+
+func TestManagedScopeInspectionKeepsStatePrivateAndUnchanged(t *testing.T) {
+	f, _, c, _ := setupManagedOAuth(t)
+	ctx := context.Background()
+	db, _ := f.db.GatewaySQL()
+	var before int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gateway_oauth_records`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	w := f.call("POST", f.base()+"/oauth/scopes", `{"app_id":"test-app"}`, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"source":"not_advertised"`) || strings.Contains(w.Body.String(), "synthetic-") {
+		t.Fatal("unsafe or unexpected discovery response", w.Code, w.Body)
+	}
+	var after int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gateway_oauth_records`).Scan(&after); err != nil || before != after {
+		t.Fatal("scope inspection changed OAuth state", before, after, err)
+	}
+	other, err := f.db.ReconcileManagedUser(ctx, store.ManagedUserInput{InstallationID: "install", Subject: "other", Active: true, Role: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = f.call("POST", "/v1/managed-users/"+other.ID+"/oauth/scopes", `{"app_id":"test-app"}`, "")
+	if w.Code == 200 {
+		t.Fatal("another user discovered a private app", w.Body)
+	}
+	beforeConnection, err := f.s.loadConnection(ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = f.call("POST", f.base()+"/connections/"+c.ID+"/oauth/start", `{"scopes":["read","read"]}`, "")
+	afterConnection, readErr := f.s.loadConnection(ctx, c.ID)
+	if w.Code != 200 || readErr != nil || beforeConnection.sourceRevision != afterConnection.sourceRevision {
+		t.Fatal("equivalent scopes changed connection policy", w.Code, w.Body, readErr)
+	}
+	w = f.call("POST", f.base()+"/connections/"+c.ID+"/oauth/start", `{"scopes":["invalid scope"]}`, "")
+	afterConnection, readErr = f.s.loadConnection(ctx, c.ID)
+	if w.Code == 200 || readErr != nil || beforeConnection.sourceRevision != afterConnection.sourceRevision {
+		t.Fatal("invalid scopes changed connection policy", w.Code, w.Body, readErr)
 	}
 }
 
