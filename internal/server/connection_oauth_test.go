@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +23,8 @@ type managedOAuthProvider struct {
 	mu                     sync.Mutex
 	refreshes, revocations int
 	block, release         chan struct{}
-	failCleanup            bool
+	cleanupStatus          int
+	cleanupBody            string
 }
 
 func (p *managedOAuthProvider) serve(w http.ResponseWriter, r *http.Request) {
@@ -50,13 +53,12 @@ func (p *managedOAuthProvider) serve(w http.ResponseWriter, r *http.Request) {
 	case "/revoke":
 		p.mu.Lock()
 		p.revocations++
-		fail := p.failCleanup
+		status, body := p.cleanupStatus, p.cleanupBody
 		p.mu.Unlock()
-		if fail {
-			w.WriteHeader(503)
-		} else {
-			fmt.Fprint(w, `{}`)
+		if status != 0 {
+			w.WriteHeader(status)
 		}
+		fmt.Fprint(w, body)
 	default:
 		w.WriteHeader(404)
 	}
@@ -315,7 +317,7 @@ func TestManagedConnectionOAuthAppLifecycleAndRevocationDuringRefresh(t *testing
 		t.Fatal("group deletion destroyed account")
 	}
 	provider.mu.Lock()
-	provider.failCleanup = true
+	provider.cleanupStatus = 503
 	provider.mu.Unlock()
 	if w = f.call("DELETE", route, "", ""); w.Code != 502 || !strings.Contains(w.Body.String(), "upstream_cleanup_failed") {
 		t.Fatal("upstream cleanup failure hidden", w.Code, w.Body)
@@ -325,13 +327,63 @@ func TestManagedConnectionOAuthAppLifecycleAndRevocationDuringRefresh(t *testing
 		t.Fatal("failed cleanup did not retain disabled connection")
 	}
 	provider.mu.Lock()
-	provider.failCleanup = false
+	provider.cleanupStatus = 200
 	provider.mu.Unlock()
 	if w = f.call("DELETE", route, "", ""); w.Code != 204 {
 		t.Fatal("explicit cleanup retry failed", w.Code, w.Body)
 	}
 	if w = f.call("GET", route, "", ""); w.Code != 404 {
 		t.Fatal("deleted global connection remained visible")
+	}
+}
+
+func TestManagedConnectionOAuthDeletionRevocationResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   int
+	}{
+		{"already invalid", 400, `{"error":"invalid_token"}`, 204},
+		{"invalid client", 400, `{"error":"invalid_client"}`, 502},
+		{"unsupported token type", 400, `{"error":"unsupported_token_type"}`, 502},
+		{"malformed response", 400, `<html>Bad request</html>`, 502},
+		{"unavailable", 503, `{"error":"invalid_token"}`, 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, provider, c, state := setupManagedOAuth(t)
+			ctx := context.Background()
+			route := f.base() + "/connections/" + c.ID
+			if w := f.complete(c, state, f.user); w.Code != 200 {
+				t.Fatal(w.Code, w.Body)
+			}
+			c, err := f.s.loadConnection(ctx, c.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.mu.Lock()
+			provider.cleanupStatus, provider.cleanupBody = tc.status, tc.body
+			provider.mu.Unlock()
+			w := f.call("DELETE", route, "", "")
+			if w.Code != tc.want {
+				t.Fatal("unexpected deletion result", w.Code, w.Body)
+			}
+			provider.mu.Lock()
+			revocations := provider.revocations
+			provider.mu.Unlock()
+			if revocations != 2 {
+				t.Fatal("did not attempt both token revocations", revocations)
+			}
+			current, err := f.s.loadConnection(ctx, c.ID)
+			account, accountErr := f.s.mcpOAuth.ConnectionAccount(ctx, c.library, c.ID)
+			if tc.want == 204 {
+				if !errors.Is(err, sql.ErrNoRows) || !errors.Is(accountErr, sql.ErrNoRows) {
+					t.Fatal("deleted connection or encrypted account remained", err, accountErr)
+				}
+			} else if err != nil || current.Status != "disabled" || accountErr != nil || account == nil {
+				t.Fatal("failed cleanup did not retain disabled connection and encrypted account", err, accountErr)
+			}
+		})
 	}
 }
 

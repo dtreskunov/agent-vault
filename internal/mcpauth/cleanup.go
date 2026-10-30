@@ -81,9 +81,19 @@ func (m *Manager) cleanupRequest(request *http.Request, operation, key string) e
 		m.logger.Warn("MCP remote cleanup failed; local disconnect continues", "operation", operation, "key", key)
 		return fmt.Errorf("%s failed", operation)
 	}
-	io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
 	response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		// Google returns 400 for an already-invalid token instead of RFC 7009's 200.
+		if operation == "token revocation" && response.StatusCode == http.StatusBadRequest && readErr == nil {
+			var failure struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(body, &failure) == nil && failure.Error == "invalid_token" {
+				m.logger.Info("MCP token already invalid; revocation complete", "key", key)
+				return nil
+			}
+		}
 		m.logger.Warn("MCP remote cleanup unavailable; local disconnect continues",
 			"operation", operation, "key", key, "status", response.StatusCode)
 		return fmt.Errorf("%s returned HTTP %d", operation, response.StatusCode)

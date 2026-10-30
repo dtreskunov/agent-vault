@@ -90,6 +90,10 @@ OAuth refresh/client state is central per connection. Detaching or deleting a
 group never revokes upstream tokens. Scope/identity expansion suspends grants
 until explicit reapproval. Revocation is rechecked on every use and closes
 long-lived credentialed operations.
+Connection deletion treats an OAuth revocation response of HTTP 400 with
+`invalid_token` as already revoked, including Google's response for expired or
+previously revoked tokens. Other remote cleanup failures retain the disabled
+connection for an explicit retry; they do not silently discard its encrypted state.
 Multiple OAuth connections may share a group's API destination. Select the
 intended account with its group-bound `Authorization: Bearer av-access:<handle>`
 placeholder; ambiguous requests without a selection fail closed. Discovery and
