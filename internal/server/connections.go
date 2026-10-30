@@ -798,7 +798,7 @@ func (s *Server) handleConnectionAccess(w http.ResponseWriter, r *http.Request) 
 	}
 	items := []accessGrant{}
 	for _, b := range bindings {
-		if b.status == "revoked" {
+		if b.status == "revoked" || b.owner.ID != a.ID {
 			continue
 		}
 		services := b.services

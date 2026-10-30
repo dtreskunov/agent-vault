@@ -6,16 +6,35 @@ import (
 	"testing"
 )
 
+func TestManagedMCPClientDisplayNameReuseAndChange(t *testing.T) {
+	m, db, _ := testManager(t)
+	authority := newAuthority(t, m)
+	ctx := context.Background()
+	user, library, _ := managedMCPFixture(t, m, db, "CONN_NAMED")
+	for _, name := range []string{"BananaClaw (Denis Treskunov)", "BananaClaw (Denis Treskunov)", "Other brand (Denis Treskunov)"} {
+		if _, err := m.StartConnection(ctx, library, user, "CONN_NAMED", "mcp_oauth", authority.server.URL+"/mcp", "", name, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	authority.mu.Lock()
+	registrations, names := authority.registrations, append([]string(nil), authority.names...)
+	authority.mu.Unlock()
+	if registrations != 2 || names[0] != "BananaClaw (Denis Treskunov)" || names[1] != "Other brand (Denis Treskunov)" {
+		t.Fatal("registration display name was not propagated or reused", registrations, names)
+	}
+}
+
 func TestManagedMCPNewestConsentAndDraftClientCleanup(t *testing.T) {
 	m, db, _ := testManager(t)
 	authority := newAuthority(t, m)
 	ctx := context.Background()
 	user, library, _ := managedMCPFixture(t, m, db, "CONN_DRAFT")
-	first, err := m.StartConnection(ctx, library, user, "CONN_DRAFT", "mcp_oauth", authority.server.URL+"/mcp", "", nil)
+	first, err := m.StartConnection(ctx, library, user, "CONN_DRAFT", "mcp_oauth", authority.server.URL+"/mcp", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := m.StartConnection(ctx, library, user, "CONN_DRAFT", "mcp_oauth", authority.server.URL+"/mcp", "", nil)
+
+	second, err := m.StartConnection(ctx, library, user, "CONN_DRAFT", "mcp_oauth", authority.server.URL+"/mcp", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

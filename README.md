@@ -75,6 +75,12 @@ personal library vaults. [Static sets](docs/guides/static-keys.mdx),
 groups through explicit service grants, not copied group credentials. Group
 sockets cannot bind personal libraries. The host authenticates transport;
 designated managed APIs enforce the effective native user's authority.
+Connection metadata, including group-access listings, is visible only to its
+owner; native instance-owner or destination-admin roles do not bypass this.
+This does not change the group's explicitly authorized runtime use.
+Managed OAuth sign-in accepts a validated `client_name` from the trusted host
+for DCR consent display. Registrations remain isolated by connection ID even
+when their friendly names are identical.
 OAuth refresh/client state is central per connection. Detaching or deleting a
 group never revokes upstream tokens. Scope/identity expansion suspends grants
 until explicit reapproval. Revocation is rechecked on every use and closes

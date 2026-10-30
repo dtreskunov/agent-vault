@@ -28,8 +28,14 @@ func (s *Server) handleConnectionOAuthStart(w http.ResponseWriter, r *http.Reque
 		ResourceURL string   `json:"resource_url"`
 		AppID       string   `json:"app_id"`
 		Scopes      []string `json:"scopes"`
+		ClientName  string   `json:"client_name"`
 	}
 	if !decodeManaged(w, r, &in) {
+		return
+	}
+	clientName, valid := mcpauth.CleanClientName(in.ClientName)
+	if !valid {
+		jsonCodedError(w, 400, "invalid_client_name", "Client name must be at most 100 characters without control characters")
 		return
 	}
 	// Resource and application identity are immutable. Reconnect cannot silently
@@ -60,7 +66,7 @@ func (s *Server) handleConnectionOAuthStart(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	started, err := s.mcpOAuth.StartConnection(r.Context(), c.library, a.ID, c.ID, c.Kind, c.ResourceURL, c.AppID, scopes)
+	started, err := s.mcpOAuth.StartConnection(r.Context(), c.library, a.ID, c.ID, c.Kind, c.ResourceURL, c.AppID, clientName, scopes)
 	if s.mcpError(w, err) {
 		return
 	}

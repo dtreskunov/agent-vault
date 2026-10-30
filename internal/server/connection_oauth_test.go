@@ -60,6 +60,28 @@ func (p *managedOAuthProvider) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 	}
 }
+func TestManagedOAuthClientNameValidation(t *testing.T) {
+	f, _, c, _ := setupManagedOAuth(t)
+	before, err := f.s.loadConnection(context.Background(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"line\nbreak", strings.Repeat("x", 101)} {
+		body, err := json.Marshal(map[string]any{"client_name": name, "scopes": []string{"changed"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := f.call("POST", f.base()+"/connections/"+c.ID+"/oauth/start", string(body), "")
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_client_name") {
+			t.Fatal("invalid client name was accepted", w.Code, w.Body)
+		}
+		latest, err := f.s.loadConnection(context.Background(), c.ID)
+		if err != nil || latest.sourceRevision != before.sourceRevision {
+			t.Fatal("invalid client name changed connection policy", err)
+		}
+	}
+}
+
 func setupManagedOAuth(t *testing.T, baseURLs ...string) (*managedFixture, *managedOAuthProvider, *connection, string) {
 	t.Helper()
 	gatewaytest.UseLoopbackDNS(t)

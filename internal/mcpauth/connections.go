@@ -28,7 +28,14 @@ func clientRecordKey(ctx context.Context, issuer string) string {
 // StartConnection reuses discovery, configured apps, PKCE and encrypted OAuth
 // records but pins the native connection key instead of guessing an account by
 // resource or provider identity.
-func (m *Manager) StartConnection(ctx context.Context, vault, user, id, kind, resource, app string, scopes []string) (*Started, error) {
+func (m *Manager) StartConnection(ctx context.Context, vault, user, id, kind, resource, app, clientName string, scopes []string) (*Started, error) {
+	clientName, valid := CleanClientName(clientName)
+	if !valid {
+		return nil, failure("invalid_client_name", "Client name must be at most 100 characters without control characters")
+	}
+	if clientName == "" {
+		clientName = "AgentVault"
+	}
 	ctx = context.WithValue(ctx, managedFlowKey{}, managedFlowIdentity{User: user, Connection: id, Scopes: scopes})
 	if kind == "oauth_app" {
 		return m.StartAccount(ctx, vault, app, scopes, "")
@@ -36,7 +43,7 @@ func (m *Manager) StartConnection(ctx context.Context, vault, user, id, kind, re
 	if kind != "mcp_oauth" {
 		return nil, failure("invalid_connection", "Connection is not OAuth")
 	}
-	return m.StartNamed(ctx, vault, resource, "", app)
+	return m.StartNamed(ctx, vault, resource, clientName, app)
 }
 func (m *Manager) ConnectionFlow(ctx context.Context, state string) (*Flow, error) {
 	return m.repo.Flow(ctx, state)

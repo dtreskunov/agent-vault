@@ -39,7 +39,7 @@ func managedMCPFixture(t *testing.T, m *Manager, db *store.SQLStore, id string) 
 func completeManagedMCP(t *testing.T, m *Manager, authority *authority, user, library, id string) (*Account, string) {
 	t.Helper()
 	ctx := context.Background()
-	started, err := m.StartConnection(ctx, library, user, id, "mcp_oauth", authority.server.URL+"/mcp", "", []string{"read"})
+	started, err := m.StartConnection(ctx, library, user, id, "mcp_oauth", authority.server.URL+"/mcp", "", "BananaClaw (Denis Treskunov)", []string{"read"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +76,12 @@ func TestManagedMCPConnectionPinsDCRAndIndependentAuthorizations(t *testing.T) {
 	second, clientTwo := completeManagedMCP(t, m, a, user, library, "CONN_MCPTWO")
 	if clientOne == clientTwo || first.Key == second.Key {
 		t.Fatal("separate connections reused a DCR/account lifecycle")
+	}
+	a.mu.Lock()
+	registrationNames := append([]string(nil), a.names...)
+	a.mu.Unlock()
+	if len(registrationNames) != 2 || registrationNames[0] != "BananaClaw (Denis Treskunov)" || registrationNames[1] != registrationNames[0] {
+		t.Fatal("friendly names were lost or used as connection identity", registrationNames)
 	}
 	accounts, err := m.repo.Accounts(ctx, library)
 	if err != nil || len(accounts) != 2 {
@@ -190,7 +196,7 @@ func TestManagedMCPCompletionRechecksDisabledNativeUser(t *testing.T) {
 	authority := newAuthority(t, m)
 	ctx := context.Background()
 	user, library, _ := managedMCPFixture(t, m, db, "CONN_DISABLE")
-	start, err := m.StartConnection(ctx, library, user, "CONN_DISABLE", "mcp_oauth", authority.server.URL+"/mcp", "", nil)
+	start, err := m.StartConnection(ctx, library, user, "CONN_DISABLE", "mcp_oauth", authority.server.URL+"/mcp", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -159,8 +159,8 @@ func TestManagedConnectionStaticSharingAndAuthorization(t *testing.T) {
 		t.Fatal("receiver reshared connection", w.Code)
 	}
 	access := f.call("GET", "/v1/managed-users/"+other.ID+"/vaults/group-one/access", "", "")
-	if access.Code != 200 || !strings.Contains(access.Body.String(), c.ID) || strings.Contains(access.Body.String(), "group-two") {
-		t.Fatal("unsafe or missing group access metadata", access.Code, access.Body)
+	if access.Code != 200 || strings.TrimSpace(access.Body.String()) != `{"grants":[]}` {
+		t.Fatal("recipient administrator saw another owner's connection metadata", access.Code, access.Body)
 	}
 	allowed, err := f.s.CredentialProvider().Inject(ctx, v.ID, "api.example.com", 443, "/v1/items")
 	if err != nil {
@@ -187,6 +187,58 @@ func TestManagedConnectionStaticSharingAndAuthorization(t *testing.T) {
 	}
 	if w = f.call("GET", route, "", ""); w.Code != 200 {
 		t.Fatal("group deletion removed connection")
+	}
+}
+
+func TestManagedConnectionAccessIsOwnerOnly(t *testing.T) {
+	for _, role := range []string{"no-access", "owner"} {
+		t.Run(role, func(t *testing.T) {
+			f := newManagedFixture(t)
+			ctx := context.Background()
+			first := f.create(basicConnection)
+			if w := f.call("PUT", f.base()+"/connections/"+first.ID+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != 200 {
+				t.Fatal(w.Code, w.Body)
+			}
+			other, err := f.db.ReconcileManagedUser(ctx, store.ManagedUserInput{
+				InstallationID: "install", Subject: "other", Active: true, Role: role,
+				VaultGrants: []store.ManagedVaultGrant{{Vault: "group-one", Role: "admin"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := "/v1/managed-users/" + other.ID
+			body := strings.NewReplacer("Basic pair", "Other private pair", "api.example.com", "other.example.com", "basic-api", "other-api").Replace(basicConnection)
+			w := f.call("POST", base+"/connections", body, "")
+			if w.Code != 201 {
+				t.Fatal(w.Code, w.Body)
+			}
+			var second connection
+			if err := json.Unmarshal(w.Body.Bytes(), &second); err != nil {
+				t.Fatal(err)
+			}
+			if w := f.call("PUT", base+"/connections/"+second.ID+"/grants/group-one", `{"services":["other-api"]}`, ""); w.Code != 200 {
+				t.Fatal(w.Code, w.Body)
+			}
+			for _, principal := range []struct{ base, own, hidden string }{
+				{f.base(), first.ID, second.ID}, {base, second.ID, first.ID},
+			} {
+				for _, endpoint := range []string{"/connections", "/vaults/group-one/access"} {
+					w := f.call("GET", principal.base+endpoint, "", "")
+					if w.Code != 200 || !strings.Contains(w.Body.String(), principal.own) || strings.Contains(w.Body.String(), principal.hidden) {
+						t.Fatal("connection metadata escaped its owner", w.Code, w.Body)
+					}
+				}
+			}
+			v, err := f.db.GetVault(ctx, "group-one")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, host := range []string{"api.example.com", "other.example.com"} {
+				if _, err := f.s.CredentialProvider().Inject(ctx, v.ID, host, 443, "/v1/items"); err != nil {
+					t.Fatal("metadata privacy revoked authorized runtime use", err)
+				}
+			}
+		})
 	}
 }
 

@@ -24,7 +24,7 @@ func TestManagedReconnectNeverGuessesRefreshTokenIdentity(t *testing.T) {
 	}
 	signIn := func() {
 		t.Helper()
-		start, err := m.StartConnection(ctx, library, user, "CONN_RECONNECT", "oauth_app", "", "test-app", []string{"read"})
+		start, err := m.StartConnection(ctx, library, user, "CONN_RECONNECT", "oauth_app", "", "test-app", "", []string{"read"})
 		if err != nil {
 			t.Fatal(err)
 		}
