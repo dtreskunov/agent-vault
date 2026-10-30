@@ -218,6 +218,14 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 	if err != nil {
 		return nil, err
 	}
+	explicitBinding := false
+	if values := brokercore.RequestBinding(ctx); len(values) != 0 {
+		if len(values) != 1 || !strings.HasPrefix(values[0], "BIND_") || len(values[0]) > 200 ||
+			strings.ContainsAny(values[0], " \t\r\n,") || (handle != "" && handle != values[0]) {
+			return nil, fmt.Errorf("%w: malformed or conflicting group binding selector", brokercore.ErrServiceDisabled)
+		}
+		handle, explicitBinding = values[0], true
+	}
 	var matchedBindings []int
 	var matchedServices []*broker.Service
 	for i := range bindings {
@@ -239,7 +247,7 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 			return nil, fmt.Errorf("%w: static/shared binding conflict", brokercore.ErrServiceDisabled)
 		}
 		if handle != "" {
-			if b.handle == handle && b.kind != "static" {
+			if b.handle == handle && (explicitBinding || b.kind != "static") {
 				chosen, service = b, matchedServices[i]
 			}
 		} else if len(matchedBindings) == 1 {
@@ -385,7 +393,8 @@ func (s *Server) sharedDiscovery(ctx context.Context, vault string) ([]discoverS
 			continue
 		}
 		for _, service := range b.services {
-			item := discoverService{Name: service.Name, Host: service.MatcherPattern()}
+			item := discoverService{Name: service.Name, Host: service.MatcherPattern(),
+				ConnectionID: b.id, ConnectionKind: b.kind, BindingHandle: b.handle}
 			if b.kind != "static" {
 				item.AccessPlaceholder = mcpauth.AccessPlaceholderPrefix + b.handle
 				for _, other := range bindings {

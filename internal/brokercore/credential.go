@@ -72,6 +72,18 @@ type CredentialProvider interface {
 }
 
 type requestAuthorizationKey struct{}
+type requestBindingKey struct{}
+
+const BindingHeader = "X-AgentVault-Binding"
+
+func WithRequestBinding(ctx context.Context, values []string) context.Context {
+	return context.WithValue(ctx, requestBindingKey{}, slices.Clone(values))
+}
+
+func RequestBinding(ctx context.Context) []string {
+	values, _ := ctx.Value(requestBindingKey{}).([]string)
+	return slices.Clone(values)
+}
 
 func WithRequestAuthorization(ctx context.Context, values []string) context.Context {
 	return context.WithValue(ctx, requestAuthorizationKey{}, slices.Clone(values))

@@ -107,6 +107,13 @@ placeholder; ambiguous requests without a selection fail closed. Discovery and
 `vault discover` expose the access placeholder and whether selection is required.
 Unknown, revoked or cross-group selections never fall through to another account.
 Static/static and static/OAuth destination conflicts remain rejected.
+Scoped discovery also exposes each authorized service's `connection_id`,
+`connection_kind` and nonsecret `binding_handle`. Hosts can resolve explicit
+MCP connection references without enumerating personal libraries. The internal
+`X-AgentVault-Binding` request header pins any supported authentication scheme
+to that group grant. The MITM proxy removes it before forwarding; invalid,
+conflicting, cross-group or revoked selectors fail closed, never selecting a
+replacement account at the same destination.
 Earlier fork group-owned state is rejected before listeners with an
 offline-adoption-required error; startup never converts it. Upgrade NanoClaw,
 gateway and reviewed state together. Rollback requires matching state and

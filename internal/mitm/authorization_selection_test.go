@@ -19,6 +19,9 @@ type selectionProvider struct{ calls atomic.Int32 }
 
 func (p *selectionProvider) Inject(ctx context.Context, _, _ string, _ int, _ string) (*brokercore.InjectResult, error) {
 	p.calls.Add(1)
+	if !slices.Equal(brokercore.RequestBinding(ctx), []string{"BIND_GROUP"}) {
+		return nil, brokercore.ErrServiceDisabled
+	}
 	if !slices.Equal(brokercore.RequestAuthorization(ctx), []string{"Bearer av-access:group-bound-selector"}) {
 		return nil, brokercore.ErrServiceDisabled
 	}
@@ -28,6 +31,9 @@ func (p *selectionProvider) Inject(ctx context.Context, _, _ string, _ int, _ st
 func TestOAuthSelectionReachesTLSInjectionAndRetry(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(brokercore.BindingHeader) != "" {
+			t.Error("internal binding selector reached upstream")
+		}
 		if r.Header.Get("Authorization") != "Bearer synthetic-selected-token" {
 			t.Error("selector was forwarded instead of the selected credential")
 		}
@@ -46,6 +52,7 @@ func TestOAuthSelectionReachesTLSInjectionAndRetry(t *testing.T) {
 	client := newTrustingClient(proxyURL, url.User("token"), clientRoots)
 	request, _ := http.NewRequest(http.MethodGet, upstream.URL+"/items", nil)
 	request.Header.Set("Authorization", "Bearer av-access:group-bound-selector")
+	request.Header.Set(brokercore.BindingHeader, "BIND_GROUP")
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)

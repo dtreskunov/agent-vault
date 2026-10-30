@@ -10,6 +10,9 @@ import (
 )
 
 type discoverService struct {
+	ConnectionID      string `json:"connection_id,omitempty"`
+	ConnectionKind    string `json:"connection_kind,omitempty"`
+	BindingHandle     string `json:"binding_handle,omitempty"`
 	Name              string `json:"name"`
 	Host              string `json:"host"`
 	AccessPlaceholder string `json:"access_placeholder,omitempty"`

@@ -197,6 +197,8 @@ func (p *Proxy) forwardRequest(
 ) {
 	r = r.WithContext(brokercore.WithProxyActor(r.Context(), scope))
 	r = r.WithContext(brokercore.WithRequestAuthorization(r.Context(), r.Header.Values("Authorization")))
+	r = r.WithContext(brokercore.WithRequestBinding(r.Context(), r.Header.Values(brokercore.BindingHeader)))
+	r.Header.Del(brokercore.BindingHeader)
 	start := time.Now()
 	authScheme, authHeader := detectAuthFromHeaders(r.Header)
 	event := brokercore.ProxyEvent{

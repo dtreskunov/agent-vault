@@ -116,7 +116,7 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 		t.Fatal("shared selectors were hidden when no local broker config exists", discovered.Code, discovered.Body)
 	}
 	for _, service := range discovery.Services {
-		if !service.SelectionRequired || service.AccessPlaceholder == "" {
+		if !service.SelectionRequired || service.AccessPlaceholder == "" || service.ConnectionID == "" || service.BindingHandle == "" {
 			t.Fatal("wire discovery omitted selector requirements")
 		}
 	}
@@ -127,6 +127,14 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 		if err != nil || result.Headers["Authorization"] != "Bearer synthetic-token-"+b.id ||
 			!slices.Contains(result.CredentialKeys, b.id) {
 			t.Fatal("wrong OAuth identity selected", err)
+		}
+		bound := brokercore.WithRequestBinding(ctx, []string{b.handle})
+		pinned, pinErr := provider.Inject(bound, one.ID, "api.example.com", 443, "/items")
+		if pinErr != nil || pinned.Headers["Authorization"] != result.Headers["Authorization"] {
+			t.Fatal("explicit MCP connection selected the wrong identity", pinErr)
+		}
+		if _, pinErr = provider.Inject(brokercore.WithRequestBinding(selected, []string{"BIND_OTHER"}), one.ID, "api.example.com", 443, "/items"); !errors.Is(pinErr, brokercore.ErrServiceDisabled) {
+			t.Fatal("conflicting selectors were accepted", pinErr)
 		}
 		if _, err = provider.Inject(selected, two.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
 			t.Fatal("binding selector crossed groups", err)
@@ -170,6 +178,9 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 	}
 	if _, err = provider.Inject(selected, one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
 		t.Fatal("revoked selection fell through to the other identity", err)
+	}
+	if _, err = provider.Inject(brokercore.WithRequestBinding(ctx, []string{firstBinding.handle}), one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+		t.Fatal("revoked named MCP reference fell through to another account", err)
 	}
 	if err = injected.Authorize(ctx); !errors.Is(err, brokercore.ErrServiceDisabled) {
 		t.Fatal("in-flight selection retained revoked authority", err)

@@ -20,6 +20,15 @@ Mount only the group's scoped proxy socket as usual.
 
 ## Selecting between accounts on the same API host
 
+NanoClaw can pin a named HTTP/SSE MCP server to a stable connection reference.
+At startup the host resolves that reference using scoped discovery fields
+`connection_id`, `connection_kind` and `binding_handle`, and generates the
+internal `X-AgentVault-Binding: <handle>` transport header. The MITM proxy
+strips this header before forwarding and applies the selected connection's
+authentication recipe. This also pins static connections without inventing
+OAuth credentials. Unknown, conflicting, revoked and cross-group handles fail
+closed rather than falling through to another connection.
+
 Several OAuth connections can authorize the same destination in one group.
 Use `Authorization: Bearer av-access:<binding handle>` to choose the intended
 account. `/discover` and `agent-vault vault discover --json` return each OAuth
