@@ -61,6 +61,9 @@ Agent Vault works with all kinds of AI Agent use-cases including secure remote c
 ## Basic Usage
 
 **NanoClaw fork:** see [Headless credential gateway](docs/guides/nanoclaw-gateway.mdx) for unattended `.env` bootstrap, socket sessions and unmatched-host tunnels on the `bananaclaw` branch.
+Track fork-owned schema and persisted-data changes in the
+[fork database ledger](docs/fork-database-ledger.md), including final-model versus
+transitional migration work.
 Socket bindings survive gateway restarts; running containers reconnect through
 the same mounted directories without respawning.
 Headless mode requires `AGENT_VAULT_REVEAL_DISABLED=true`; credential values
@@ -72,7 +75,9 @@ Native non-login users map uniquely from `(installation_id, subject)` and own
 personal library vaults. [Static sets](docs/guides/static-keys.mdx),
 [MCP OAuth](docs/guides/mcp-oauth.mdx) and
 [OAuth apps](docs/guides/oauth-apps.mdx) are user-owned connections shared with
-groups through explicit service grants, not copied group credentials. Group
+groups through whole-credential grants, not copied group credentials. Each grant
+covers all current and future URL rules, including existing partial grants from
+earlier versions. Service-selection fields on grant writes are rejected. Group
 sockets cannot bind personal libraries. The host authenticates transport;
 designated managed APIs enforce the effective native user's authority.
 Connection metadata, including group-access listings, is visible only to its
@@ -87,8 +92,10 @@ authorization-server options; missing metadata is not an implicit permission
 grant. Scope policy comparison treats values as sets while preserving the
 difference between unspecified and explicitly empty requests.
 OAuth refresh/client state is central per connection. Detaching or deleting a
-group never revokes upstream tokens. Scope/identity expansion suspends grants
-until explicit reapproval. Revocation is rechecked on every use and closes
+group never revokes upstream tokens. URL rules and owner-approved OAuth permissions
+automatically apply to every granted agent. Disabled or disconnected credentials
+remain unusable without losing agent access settings. Loss of native owner/admin
+authority still pauses grants and requires explicit restoration. Revocation is rechecked on every use and closes
 long-lived credentialed operations.
 Connection deletion treats an OAuth revocation response of HTTP 400 with
 `invalid_token` as already revoked, including Google's response for expired or

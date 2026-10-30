@@ -32,6 +32,12 @@ MCP SDK license/NOTICE files are distributed alongside them.
 
 ## Release workflow
 
+For database-affecting changes, update the
+[fork database ledger](../fork-database-ledger.md) with schema/payload lineage,
+upstream ownership, final-versus-transitional status and deployment impact.
+It tracks candidates for future consolidation; it does not authorize removing
+already-applied migrations or changing live databases during a release.
+
 The `Gateway release` workflow runs on `gw-v*` tags. It runs the readonly suite,
 targeted race tests, vet and telemetry-free tests; builds all targets; compares
 checkout/archive output; runs pinned `govulncheck` source/call-graph scans for
