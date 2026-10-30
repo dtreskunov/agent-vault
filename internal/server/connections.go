@@ -715,7 +715,7 @@ func (s *Server) handleConnectionGrant(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("If-Match") != "" && !matchConnectionRevision(w, r, c) {
 		return
 	}
-	if err = s.assertBindingUnambiguous(r.Context(), v.ID, c.ID, selected); err != nil {
+	if err = s.assertBindingDestinationsCompatible(r.Context(), v.ID, c.ID, c.Kind, selected); err != nil {
 		jsonCodedError(w, 409, "binding_conflict", err.Error())
 		return
 	}

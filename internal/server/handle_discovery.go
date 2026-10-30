@@ -1,15 +1,19 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/Infisical/agent-vault/internal/broker"
 )
 
 type discoverService struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
+	Name              string `json:"name"`
+	Host              string `json:"host"`
+	AccessPlaceholder string `json:"access_placeholder,omitempty"`
+	SelectionRequired bool   `json:"selection_required,omitempty"`
 }
 
 type discoverResponse struct {
@@ -37,27 +41,23 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 
 	// Load broker config for this vault.
 	brokerCfg, err := s.store.GetBrokerConfig(ctx, ns.ID)
-	if err != nil || brokerCfg == nil {
-		// No config means no services — return empty list.
-		jsonOK(w, discoverResponse{
-			Vault:                ns.Name,
-			Services:             []discoverService{},
-			AvailableCredentials: credentialKeys,
-		})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		proxyError(w, http.StatusInternalServerError, "internal", "Failed to load broker services")
 		return
 	}
 
 	var svcList []broker.Service
-	if err := json.Unmarshal([]byte(brokerCfg.ServicesJSON), &svcList); err != nil {
-		proxyError(w, http.StatusInternalServerError, "internal", "Failed to parse broker services")
-		return
+	if brokerCfg != nil {
+		if err := json.Unmarshal([]byte(brokerCfg.ServicesJSON), &svcList); err != nil {
+			proxyError(w, http.StatusInternalServerError, "internal", "Failed to parse broker services")
+			return
+		}
 	}
 	shared, sharedKeys, err := s.sharedDiscovery(ctx, ns.ID)
 	if err != nil {
 		jsonError(w, 500, "Shared discovery failed")
 		return
 	}
-	svcList = append(svcList, shared...)
 	credentialKeys = append(credentialKeys, sharedKeys...)
 	// MarshalJSON persists Host in joined form; re-split so
 	// MatcherPattern emits the same shape regardless of storage form.
@@ -76,6 +76,7 @@ func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
 			Host: svc.MatcherPattern(),
 		}
 	}
+	services = append(services, shared...)
 
 	jsonOK(w, discoverResponse{
 		Vault:                ns.Name,

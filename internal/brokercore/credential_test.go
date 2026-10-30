@@ -12,6 +12,20 @@ import (
 	"github.com/Infisical/agent-vault/internal/store"
 )
 
+func TestRequestAuthorizationIsRequestScopedAndCopied(t *testing.T) {
+	headers := []string{"Bearer av-access:first"}
+	ctx := WithRequestAuthorization(context.Background(), headers)
+	headers[0] = "changed"
+	read := RequestAuthorization(ctx)
+	if len(read) != 1 || read[0] != "Bearer av-access:first" {
+		t.Fatal("caller mutated the request selector")
+	}
+	read[0] = "changed again"
+	if RequestAuthorization(ctx)[0] != "Bearer av-access:first" || RequestAuthorization(context.Background()) != nil {
+		t.Fatal("selector leaked or was mutated through a read")
+	}
+}
+
 // fakeCredStore satisfies CredentialStore for tests.
 type fakeCredStore struct {
 	brokerCfg    map[string]*store.BrokerConfig // vaultID → config

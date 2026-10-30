@@ -84,7 +84,7 @@ func serviceOverlap(a, b broker.Service) bool {
 	ap, bp := prefix(a.Path), prefix(b.Path)
 	return strings.HasPrefix(ap, bp) || strings.HasPrefix(bp, ap)
 }
-func (s *Server) assertBindingUnambiguous(ctx context.Context, vault, exclude string, selected []broker.Service) error {
+func (s *Server) assertBindingDestinationsCompatible(ctx context.Context, vault, exclude, kind string, selected []broker.Service) error {
 	bindings, err := s.loadBindings(ctx, vault)
 	if err != nil {
 		return err
@@ -92,6 +92,9 @@ func (s *Server) assertBindingUnambiguous(ctx context.Context, vault, exclude st
 	var occupied []broker.Service
 	for _, b := range bindings {
 		if b.id != exclude && b.status != "revoked" {
+			if kind != "static" && b.kind != "static" {
+				continue
+			}
 			occupied = append(occupied, b.services...)
 		}
 	}
@@ -166,6 +169,25 @@ type sharedCredentialProvider struct {
 	local brokercore.CredentialProvider
 }
 
+func accessBindingHandle(values []string) (string, error) {
+	for _, value := range values {
+		if !strings.Contains(value, mcpauth.AccessPlaceholderPrefix) {
+			continue
+		}
+		parts := strings.Fields(value)
+		if len(values) != 1 || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") ||
+			!strings.HasPrefix(parts[1], mcpauth.AccessPlaceholderPrefix) {
+			return "", fmt.Errorf("%w: malformed OAuth binding selector", brokercore.ErrServiceDisabled)
+		}
+		handle := strings.TrimPrefix(parts[1], mcpauth.AccessPlaceholderPrefix)
+		if handle == "" {
+			return "", fmt.Errorf("%w: empty OAuth binding selector", brokercore.ErrServiceDisabled)
+		}
+		return handle, nil
+	}
+	return "", nil
+}
+
 func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string, port int, path string) (*brokercore.InjectResult, error) {
 	if db, _ := p.s.connectionSQL(); db == nil {
 		return p.local.Inject(ctx, vault, host, port, path)
@@ -196,25 +218,50 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 	if path == "" {
 		path = "/"
 	}
-	var chosen *sharedBinding
-	var service *broker.Service
+	handle, err := accessBindingHandle(brokercore.RequestAuthorization(ctx))
+	if err != nil {
+		return nil, err
+	}
+	var matchedBindings []int
+	var matchedServices []*broker.Service
 	for i := range bindings {
 		b := &bindings[i]
 		matched, _ := broker.MatchService(host, port, path, b.services)
 		if matched == nil {
 			continue
 		}
-		if chosen != nil {
-			if b.status == "revoked" {
-				continue
-			}
-			if chosen.status != "revoked" {
-				return nil, fmt.Errorf("%w: ambiguous shared bindings", brokercore.ErrServiceDisabled)
-			}
+		if b.status != "revoked" || handle == b.handle {
+			matchedBindings = append(matchedBindings, i)
+			matchedServices = append(matchedServices, matched)
 		}
-		chosen, service = b, matched
+	}
+	var chosen *sharedBinding
+	var service *broker.Service
+	for i, index := range matchedBindings {
+		b := &bindings[index]
+		if len(matchedBindings) > 1 && b.kind == "static" {
+			return nil, fmt.Errorf("%w: static/shared binding conflict", brokercore.ErrServiceDisabled)
+		}
+		if handle != "" {
+			if b.handle == handle && b.kind != "static" {
+				chosen, service = b, matchedServices[i]
+			}
+		} else if len(matchedBindings) == 1 {
+			chosen, service = b, matchedServices[i]
+		}
+	}
+	if handle != "" && chosen == nil {
+		return nil, fmt.Errorf("%w: OAuth binding selector is not authorized at this destination", brokercore.ErrServiceDisabled)
+	}
+	if handle == "" && len(matchedBindings) > 1 {
+		return nil, fmt.Errorf("%w: ambiguous shared bindings require an explicit OAuth access placeholder", brokercore.ErrServiceDisabled)
 	}
 	if chosen == nil {
+		for _, b := range bindings {
+			if matched, _ := broker.MatchService(host, port, path, b.services); matched != nil && b.status == "revoked" {
+				return nil, fmt.Errorf("%w: matching shared binding was revoked", brokercore.ErrServiceDisabled)
+			}
+		}
 		return p.local.Inject(ctx, vault, host, port, path)
 	}
 	if err = p.s.authorizeBinding(ctx, vault, *chosen); err != nil {
@@ -330,25 +377,36 @@ func (s *Server) sharedTokenResponse(ctx context.Context, vault string, r *http.
 	})
 }
 
-func (s *Server) sharedDiscovery(ctx context.Context, vault string) ([]broker.Service, []string, error) {
+func (s *Server) sharedDiscovery(ctx context.Context, vault string) ([]discoverService, []string, error) {
 	bindings, err := s.loadBindings(ctx, vault)
 	if err != nil {
 		return nil, nil, err
 	}
-	var services []broker.Service
+	services := []discoverService{}
 	keys := []string{}
 	for _, b := range bindings {
 		if err = s.authorizeBinding(ctx, vault, b); err != nil {
 			continue
 		}
 		for _, service := range b.services {
+			item := discoverService{Name: service.Name, Host: service.MatcherPattern()}
 			if b.kind != "static" {
-				service.Auth.Token = b.handle
+				item.AccessPlaceholder = mcpauth.AccessPlaceholderPrefix + b.handle
+				for _, other := range bindings {
+					if other.id == b.id || other.status == "revoked" {
+						continue
+					}
+					for _, candidate := range other.services {
+						if serviceOverlap(service, candidate) {
+							item.SelectionRequired = true
+						}
+					}
+				}
 				keys = append(keys, b.handle)
 			} else {
 				keys = append(keys, service.CredentialKeys()...)
 			}
-			services = append(services, service)
+			services = append(services, item)
 		}
 	}
 	slices.Sort(keys)

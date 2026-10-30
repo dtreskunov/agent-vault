@@ -90,6 +90,12 @@ OAuth refresh/client state is central per connection. Detaching or deleting a
 group never revokes upstream tokens. Scope/identity expansion suspends grants
 until explicit reapproval. Revocation is rechecked on every use and closes
 long-lived credentialed operations.
+Multiple OAuth connections may share a group's API destination. Select the
+intended account with its group-bound `Authorization: Bearer av-access:<handle>`
+placeholder; ambiguous requests without a selection fail closed. Discovery and
+`vault discover` expose the access placeholder and whether selection is required.
+Unknown, revoked or cross-group selections never fall through to another account.
+Static/static and static/OAuth destination conflicts remain rejected.
 Earlier fork group-owned state is rejected before listeners with an
 offline-adoption-required error; startup never converts it. Upgrade NanoClaw,
 gateway and reviewed state together. Rollback requires matching state and

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/broker"
@@ -68,6 +69,17 @@ type InjectResult struct {
 // path only — no query, no fragment.
 type CredentialProvider interface {
 	Inject(ctx context.Context, vaultID, targetHost string, targetPort int, targetPath string) (*InjectResult, error)
+}
+
+type requestAuthorizationKey struct{}
+
+func WithRequestAuthorization(ctx context.Context, values []string) context.Context {
+	return context.WithValue(ctx, requestAuthorizationKey{}, slices.Clone(values))
+}
+
+func RequestAuthorization(ctx context.Context) []string {
+	values, _ := ctx.Value(requestAuthorizationKey{}).([]string)
+	return slices.Clone(values)
 }
 
 // CredentialStore is the minimal store surface used by StoreCredentialProvider.

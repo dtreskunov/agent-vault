@@ -53,8 +53,10 @@ variables). In agent mode (AGENT_VAULT_TOKEN set), AGENT_VAULT_VAULT (or
 		var resp struct {
 			Vault    string `json:"vault"`
 			Services []struct {
-				Name string `json:"name"`
-				Host string `json:"host"`
+				Name              string `json:"name"`
+				Host              string `json:"host"`
+				AccessPlaceholder string `json:"access_placeholder"`
+				SelectionRequired bool   `json:"selection_required"`
 			} `json:"services"`
 			AvailableCredentials []string `json:"available_credentials"`
 		}
@@ -69,9 +71,28 @@ variables). In agent mode (AGENT_VAULT_TOKEN set), AGENT_VAULT_VAULT (or
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "%s\n", boldText("Services"))
 			t := newTable(w)
-			t.AppendHeader(table.Row{"NAME", "HOST"})
+			hasOAuth := false
 			for _, svc := range resp.Services {
-				t.AppendRow(table.Row{svc.Name, svc.Host})
+				hasOAuth = hasOAuth || svc.AccessPlaceholder != ""
+			}
+			header := table.Row{"NAME", "HOST"}
+			if hasOAuth {
+				header = append(header, "AUTHORIZATION", "SELECTION")
+			}
+			t.AppendHeader(header)
+			for _, svc := range resp.Services {
+				row := table.Row{svc.Name, svc.Host}
+				if hasOAuth {
+					authorization, selection := "", ""
+					if svc.AccessPlaceholder != "" {
+						authorization, selection = "Bearer "+svc.AccessPlaceholder, "optional"
+						if svc.SelectionRequired {
+							selection = "required"
+						}
+					}
+					row = append(row, authorization, selection)
+				}
+				t.AppendRow(row)
 			}
 			t.Render()
 		} else {

@@ -4,18 +4,35 @@ description: "Synthetic refresh responses without exposing account credentials."
 ---
 
 F8 lets a stdio MCP client use normal OAuth refresh logic while the gateway
-keeps the real provider tokens. Configure the client with the connected
-API-account key returned by [OAuth account sign-in](/guides/oauth-apps):
+keeps the real provider tokens. For managed shared connections, configure the
+client with its **receiving group's binding handle**, not the connection ID or
+owner's library account key:
 
 | Client field | Placeholder |
 | --- | --- |
-| Refresh token | `av-refresh:<account key>` |
-| Access token | `av-access:<account key>` |
+| Refresh token | `av-refresh:<binding handle>` |
+| Access token | `av-access:<binding handle>` |
 
-This account-specific placeholder convention is the NanoClaw
+This group-and-connection-specific placeholder convention is the NanoClaw
 integration contract; the host must put these values, not real tokens, in the
 stdio client's configuration. Neither placeholder is a gateway bearer token.
 Mount only the group's scoped proxy socket as usual.
+
+## Selecting between accounts on the same API host
+
+Several OAuth connections can authorize the same destination in one group.
+Use `Authorization: Bearer av-access:<binding handle>` to choose the intended
+account. `/discover` and `agent-vault vault discover --json` return each OAuth
+service's `access_placeholder` and `selection_required`; the table output shows
+the Authorization value and whether selection is required. Discovery includes
+shared grants even when the group has no local broker configuration.
+
+When destinations overlap, requests without an explicit selection fail closed;
+there is no account precedence or declaration-order fallback. Malformed,
+unknown, wrong-destination, cross-group, revoked and suspended selectors fail
+closed rather than using another connection. Selection does not widen the
+binding's approved services or expose provider tokens. Static/static and
+static/OAuth overlaps remain invalid.
 
 The gateway records token authorities from configured apps and pinned account
 metadata in a persistent, instance-wide interception registry. Known authorities
@@ -25,9 +42,9 @@ Clients must trust the gateway CA. Unknown authorities retain normal policy:
 the gateway cannot inspect arbitrary blindly tunnelled hosts.
 
 A form-encoded HTTPS POST to the account's exact pinned token endpoint with
-`grant_type=refresh_token&refresh_token=av-refresh:<key>` returns synthetic
-access/refresh tokens and an expiry. The account must be connected in the
-socket's vault and match that endpoint. Unknown, cross-vault, disconnected or
+`grant_type=refresh_token&refresh_token=av-refresh:<handle>` returns synthetic
+access/refresh tokens and an expiry. The binding must be active in the socket's
+group, reference a connected account and match that endpoint. Unknown, cross-group, disconnected or
 wrong-endpoint placeholders return OAuth `400 invalid_grant`; wrong methods or
 malformed grants return `400 invalid_request`. Near-miss paths on known token
 authorities do not acquire a valid synthetic refresh response.
