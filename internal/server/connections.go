@@ -252,7 +252,7 @@ func (s *Server) loadConnection(ctx context.Context, id string) (*connection, er
 			}
 		}
 	}
-	rows, err := db.QueryContext(ctx, d.Rebind(`SELECT v.name,g.services_json,g.status,g.binding_handle FROM connection_grants g JOIN vaults v ON v.id=g.vault_id WHERE g.connection_id=? AND g.status<>'revoked' ORDER BY v.name`), id)
+	rows, err := db.QueryContext(ctx, d.Rebind(`SELECT v.name,g.status,g.binding_handle FROM connection_grants g JOIN vaults v ON v.id=g.vault_id WHERE g.connection_id=? AND g.status<>'revoked' ORDER BY v.name`), id)
 	if err != nil {
 		return nil, err
 	}
@@ -260,12 +260,15 @@ func (s *Server) loadConnection(ctx context.Context, id string) (*connection, er
 	handles := ""
 	for rows.Next() {
 		var g connectionGrant
-		var raw, handle string
-		if err = rows.Scan(&g.Vault, &raw, &g.Status, &handle); err != nil {
+		var handle string
+		if err = rows.Scan(&g.Vault, &g.Status, &handle); err != nil {
 			return nil, err
 		}
-		if err = json.Unmarshal([]byte(raw), &g.Services); err != nil {
-			return nil, err
+		g.Services = []string{}
+		for _, service := range c.Services {
+			if service.Enabled == nil || *service.Enabled {
+				g.Services = append(g.Services, service.Name)
+			}
 		}
 		c.Grants = append(c.Grants, g)
 		handles += handle + "\x00"
@@ -273,9 +276,8 @@ func (s *Server) loadConnection(ctx context.Context, id string) (*connection, er
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	// The wire ETag covers grant metadata too, while the stored source-policy
-	// revision authorizes bindings. Editing one recipient cannot invalidate an
-	// unrelated group's already-authorized stream.
+	// Recipient edits affect the wire ETag, not the source-policy revision used
+	// to invalidate in-flight requests after changes to the credential itself.
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return nil, err
@@ -507,7 +509,6 @@ func (s *Server) handleConnectionUpdate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	oldRevision := c.sourceRevision
-	policyChanged := false
 	if in.Label != nil {
 		if strings.TrimSpace(*in.Label) == "" {
 			jsonError(w, 400, "Label must not be empty")
@@ -541,12 +542,24 @@ func (s *Server) handleConnectionUpdate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		c.Services = *in.Services
-		policyChanged = true
+		for _, grant := range c.Grants {
+			if grant.Status != "active" {
+				continue
+			}
+			vault, vaultErr := s.store.GetVault(r.Context(), grant.Vault)
+			if vaultErr != nil {
+				jsonError(w, 500, "Granted agent unavailable")
+				return
+			}
+			if err = s.assertBindingDestinationsCompatible(r.Context(), vault.ID, c.ID, c.Kind, c.Services); err != nil {
+				jsonCodedError(w, 409, "binding_conflict", err.Error())
+				return
+			}
+		}
 	}
 	if in.Enabled != nil {
 		if !*in.Enabled {
 			c.Status = "disabled"
-			policyChanged = true
 		} else if c.Kind == "static" {
 			c.Status = "ready"
 		} else {
@@ -587,13 +600,6 @@ func (s *Server) handleConnectionUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	if err == nil && in.Values != nil {
 		err = s.writeConnectionValues(r.Context(), tx, c.library, c.ID, *in.Values)
-	}
-	if err == nil {
-		if policyChanged {
-			_, err = tx.ExecContext(r.Context(), d.Rebind(`UPDATE connection_grants SET status='suspended' WHERE connection_id=? AND status='active'`), c.ID)
-		} else {
-			_, err = tx.ExecContext(r.Context(), d.Rebind(`UPDATE connection_grants SET approved_revision=? WHERE connection_id=? AND status='active' AND approved_revision=?`), c.Revision, c.ID, oldRevision)
-		}
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -651,14 +657,8 @@ func (s *Server) handleConnectionGrant(w http.ResponseWriter, r *http.Request) {
 	if v == nil {
 		return
 	}
-	var in struct {
-		Services []string `json:"services"`
-	}
+	var in struct{}
 	if !decodeManaged(w, r, &in) {
-		return
-	}
-	if len(in.Services) == 0 {
-		jsonError(w, 400, "Explicit connection service names are required")
 		return
 	}
 	unlock, err := s.store.LockVault(r.Context(), "connection-policy")
@@ -676,26 +676,10 @@ func (s *Server) handleConnectionGrant(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, 409, "Only ready connections can be granted")
 		return
 	}
-	selected := []broker.Service{}
-	seen := map[string]bool{}
-	for _, name := range in.Services {
-		if seen[name] {
-			jsonError(w, 400, "Duplicate service")
-			return
-		}
-		seen[name] = true
-		found := false
-		for _, service := range c.Services {
-			if service.Name == name {
-				selected = append(selected, service)
-				found = true
-				break
-			}
-		}
-		if !found {
-			jsonError(w, 400, "Unknown connection service")
-			return
-		}
+	selected := c.Services
+	names := make([]string, 0, len(selected))
+	for _, service := range selected {
+		names = append(names, service.Name)
 	}
 	db, d := s.connectionSQL()
 	var existing string
@@ -719,7 +703,7 @@ func (s *Server) handleConnectionGrant(w http.ResponseWriter, r *http.Request) {
 		jsonCodedError(w, 409, "binding_conflict", err.Error())
 		return
 	}
-	raw, _ := json.Marshal(in.Services)
+	raw, _ := json.Marshal(names)
 	bound, _ := json.Marshal(selected)
 	_, err = db.ExecContext(r.Context(), d.Rebind(`INSERT INTO connection_grants (connection_id,vault_id,services_json,bound_services_json,approved_revision,status,creator_user_id,binding_handle)
 		VALUES (?,?,?,?,?,'active',?,?) ON CONFLICT(connection_id,vault_id) DO UPDATE SET services_json=excluded.services_json,bound_services_json=excluded.bound_services_json,
@@ -808,7 +792,11 @@ func (s *Server) handleConnectionAccess(w http.ResponseWriter, r *http.Request) 
 				services[i].Auth.Token = b.handle
 			}
 		}
-		items = append(items, accessGrant{ConnectionID: b.id, Label: b.label, Owner: b.owner, Services: services, Status: b.status})
+		status := b.status
+		if status == "active" && b.connectionStatus != "ready" {
+			status = b.connectionStatus
+		}
+		items = append(items, accessGrant{ConnectionID: b.id, Label: b.label, Owner: b.owner, Services: services, Status: status})
 	}
 	jsonOK(w, map[string]any{"grants": items})
 }

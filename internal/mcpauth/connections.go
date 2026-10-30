@@ -53,8 +53,8 @@ func (m *Manager) ConnectionAccount(ctx context.Context, vault, id string) (*Acc
 }
 
 // syncConnectionAccount runs in the same transaction as the authoritative
-// encrypted token/client state. Scope or identity expansion can therefore never
-// race a subsequent injection using an old approved revision.
+// encrypted token/client state. Grants follow the connection; policy changes
+// invalidate in-flight requests without requiring agent access to be reapproved.
 func (r *Repository) syncConnectionAccount(ctx context.Context, tx *sql.Tx, vault string, a *Account, connect bool) error {
 	var oldStatus, oldRevision string
 	err := tx.QueryRowContext(ctx, r.dialect.Rebind(`SELECT status,revision FROM connections WHERE id=? AND library_vault_id=? AND deleted=0`), a.Key, vault).Scan(&oldStatus, &oldRevision)
@@ -108,10 +108,7 @@ func (r *Repository) syncConnectionAccount(ctx context.Context, tx *sql.Tx, vaul
 	if err != nil {
 		return err
 	}
-	if authorityChanged || a.Reconnect {
-		_, err = tx.ExecContext(ctx, r.dialect.Rebind(`UPDATE connection_grants SET status='suspended' WHERE connection_id=? AND status='active'`), a.Key)
-	}
-	return err
+	return nil
 }
 func scopeExpansion(old, next Account) bool {
 	before, after := old.GrantedScopes, next.GrantedScopes

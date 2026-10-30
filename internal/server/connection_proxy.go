@@ -22,9 +22,9 @@ import (
 )
 
 type sharedBinding struct {
-	id, label, kind, library, revision, approved, status, handle, creator string
-	owner                                                                 connectionOwner
-	services                                                              []broker.Service
+	id, label, kind, library, revision, status, connectionStatus, handle, creator string
+	owner                                                                         connectionOwner
+	services                                                                      []broker.Service
 }
 
 func (s *Server) loadBindings(ctx context.Context, vault string) ([]sharedBinding, error) {
@@ -32,7 +32,9 @@ func (s *Server) loadBindings(ctx context.Context, vault string) ([]sharedBindin
 	if db == nil {
 		return nil, nil
 	}
-	rows, err := db.QueryContext(ctx, d.Rebind(`SELECT c.id,c.label,c.kind,c.library_vault_id,c.revision,g.approved_revision,g.status,g.binding_handle,g.creator_user_id,c.owner_user_id,u.display_name,g.bound_services_json,g.services_json
+	// Grant snapshots are retained for storage compatibility, but authorization
+	// follows all current and future URL rules of the referenced connection.
+	rows, err := db.QueryContext(ctx, d.Rebind(`SELECT c.id,c.label,c.kind,c.library_vault_id,c.revision,g.status,c.status,g.binding_handle,g.creator_user_id,c.owner_user_id,u.display_name,c.services_json
 		FROM connection_grants g JOIN connections c ON c.id=g.connection_id JOIN users u ON u.id=c.owner_user_id
 		WHERE g.vault_id=? ORDER BY c.id`), vault)
 	if err != nil {
@@ -42,23 +44,17 @@ func (s *Server) loadBindings(ctx context.Context, vault string) ([]sharedBindin
 	items := []sharedBinding{}
 	for rows.Next() {
 		var b sharedBinding
-		var raw, selectedRaw string
-		if err = rows.Scan(&b.id, &b.label, &b.kind, &b.library, &b.revision, &b.approved, &b.status, &b.handle, &b.creator, &b.owner.ID, &b.owner.Label, &raw, &selectedRaw); err != nil {
+		var raw string
+		if err = rows.Scan(&b.id, &b.label, &b.kind, &b.library, &b.revision, &b.status, &b.connectionStatus, &b.handle, &b.creator, &b.owner.ID, &b.owner.Label, &raw); err != nil {
 			return nil, err
 		}
 		var services []broker.Service
-		var selected []string
 		if err = json.Unmarshal([]byte(raw), &services); err != nil {
 			return nil, err
 		}
-		if err = json.Unmarshal([]byte(selectedRaw), &selected); err != nil {
-			return nil, err
-		}
 		for _, service := range services {
-			if slices.Contains(selected, service.Name) {
-				service.Host, service.Path, service.Port = broker.SplitInlineHost(service.Host, service.Path)
-				b.services = append(b.services, service)
-			}
+			service.Host, service.Path, service.Port = broker.SplitInlineHost(service.Host, service.Path)
+			b.services = append(b.services, service)
 		}
 		items = append(items, b)
 	}
@@ -125,7 +121,7 @@ func (s *Server) authorizeBinding(ctx context.Context, vault string, b sharedBin
 		JOIN users u ON u.id=c.owner_user_id JOIN users creator ON creator.id=g.creator_user_id
 		JOIN vaults v ON v.id=g.vault_id
 		WHERE g.vault_id=? AND c.id=? AND g.binding_handle=? AND g.status='active' AND c.status='ready' AND c.deleted=0
-		AND c.revision=? AND g.approved_revision=c.revision AND u.auth_mode='managed' AND u.is_active=?
+		AND c.revision=? AND u.auth_mode='managed' AND u.is_active=?
 		AND creator.is_active=? AND creator.id=c.owner_user_id AND v.purpose='group'
 		AND EXISTS(SELECT 1 FROM vault_grants vg WHERE vg.actor_id=g.creator_user_id AND vg.actor_type='user' AND vg.vault_id=g.vault_id AND vg.role='admin')
 		AND EXISTS(SELECT 1 FROM vaults library WHERE library.id=c.library_vault_id AND library.purpose='library' AND library.owner_user_id=c.owner_user_id)`),

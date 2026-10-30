@@ -102,14 +102,14 @@ PUT `/connections/{connection}` requires its exact `If-Match` revision and
 atomically patches values/metadata; it never reveals values or retries an
 upsert. Missing/stale revisions return `428`/`412`.
 
-Grant selected service names explicitly:
+Grant the whole credential explicitly:
 
 ```http
 PUT /v1/managed-users/<native user ID>/connections/<connection ID>/grants/ag-1780956116163-prz9h2
 If-None-Match: *
 Content-Type: application/json
 
-{"services":["example"]}
+{}
 ```
 
 The effective native user must own the connection **and** administer that
@@ -120,8 +120,11 @@ safe references with GET `/.../vaults/{vault}/access`.
 
 Removing access or deleting a group never deletes the source, revokes OAuth or
 removes a DCR client. Owner connection deletion is global, disables all grants
-first and reports configured upstream cleanup failures explicitly. Scope/
-identity expansion suspends grants pending reapproval. Revoked/native-disabled
+first and reports configured upstream cleanup failures explicitly. Grants follow
+all current and future URL rules and owner-approved OAuth permissions, including
+formerly partial grants. Service selectors on grant writes are rejected.
+Disabled or disconnected credentials cannot be used; their access settings are
+preserved for reenabling/reconnection. Revoked/native-disabled
 principals fail closed; restoring membership does not silently reapprove.
 
 The fork's earlier `/keys`, `/key-sets`, group `/mcp-oauth`, `/oauth-accounts`

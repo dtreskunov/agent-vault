@@ -45,7 +45,8 @@ in `If-Match`; missing/stale preconditions return `428`/`412`, not an upsert.
 All secret values stay write-only.
 
 Explicit sharing uses PUT `/connections/{connection}/grants/{vault}`
-`{services:[<connection service names>]}`. The effective user must own the
+`{}`. A grant covers the whole credential and all current and future URL rules;
+service selectors are rejected. The effective user must own the
 connection and administer the destination natively; host owner privileges do
 not transfer. Existing grants need exact `If-Match` for reapproval/update.
 Owner or destination admin may DELETE the grant. Access list/detach uses
@@ -58,8 +59,10 @@ The host completes at `POST /v1/oauth/complete {user_id,state,code,iss?}`.
 Completion returns `{connection_id,status,account?,code?,error?}` with no
 credential key or token. State pins the initiating native user/connection,
 issuer, resource, client, redirect and PKCE verifier; ownership is rechecked
-after exchange. There is no automatic account merge or scope union. Scope/
-identity expansion suspends recipients pending reviewed reapproval.
+after exchange. There is no automatic account merge or scope union. Agent grants
+follow the connection's owner-approved permissions. A connection needing sign-in
+cannot be used until its owner reconnects; native authority loss still pauses
+grants until explicitly restored.
 
 OAuth apps use GET `/v1/managed-users/{user}/oauth-apps` and PUT/DELETE
 `/oauth-apps/{app}?scope=user|install`. Only an effective native owner may

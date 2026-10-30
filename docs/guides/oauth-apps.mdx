@@ -26,8 +26,8 @@ public-client mode; confidential identity changes require a supplied secret.
 safe usage counts. Secret values are never returned. A same-ID user config can
 override an install config, but a connection pins its actual issuing source and
 client. Secret-only rotation updates that central pinned client; identity
-changes or app deletion mark affected connections `needs_reconnect` and suspend
-their grants without silently transferring authorization.
+changes or app deletion mark affected connections `needs_reconnect`. Agent access
+settings remain intact, but use is blocked until the owner signs in again.
 
 ## Connect an API account
 
@@ -50,9 +50,10 @@ permission catalog or merge authorizations based on email/subject. Metadata
 reports requested/granted scopes, provenance and verified account labels when
 available. Identity lookup failure leaves account metadata null.
 
-Explicit connection-service grants attach references to group vaults. Owners
+Explicit whole-credential grants attach references to group vaults. Owners
 must also be native destination admins; recipients cannot retarget or reshare.
-Authority expansion suspends grants until reviewed reapproval. A group
+All current and future URL rules and owner-approved permissions apply to granted
+agents automatically; the provider's actual token scopes still limit use. A group
 detachment/deletion never revokes provider tokens. Global owner connection
 deletion disables recipients first and reports configured upstream cleanup
 failures explicitly.

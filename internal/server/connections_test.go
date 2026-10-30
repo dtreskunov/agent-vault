@@ -95,7 +95,7 @@ func TestManagedConnectionStaticSharingAndAuthorization(t *testing.T) {
 		t.Fatal("unexpected connection metadata")
 	}
 	for _, group := range []string{"group-one", "group-two"} {
-		w := f.call("PUT", route+"/grants/"+group, `{"services":["basic-api"]}`, "")
+		w := f.call("PUT", route+"/grants/"+group, `{}`, "")
 		if w.Code != 200 {
 			t.Fatal(w.Code, w.Body)
 		}
@@ -109,7 +109,7 @@ func TestManagedConnectionStaticSharingAndAuthorization(t *testing.T) {
 			t.Fatal("shared basic pair not resolved", err)
 		}
 	}
-	if w := f.call("PUT", route+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != 409 {
+	if w := f.call("PUT", route+"/grants/group-one", `{}`, ""); w.Code != 409 {
 		t.Fatal("create-only grant replay accepted", w.Code)
 	}
 	c, err := f.s.loadConnection(ctx, c.ID)
@@ -155,7 +155,7 @@ func TestManagedConnectionStaticSharingAndAuthorization(t *testing.T) {
 	if w = f.call("PUT", otherRoute, `{"label":"retarget"}`, next.Revision); w.Code != 403 {
 		t.Fatal("receiver gained rotation", w.Code)
 	}
-	if w = f.call("PUT", otherRoute+"/grants/group-one", `{"services":["basic-api"]}`, next.Revision); w.Code != 403 {
+	if w = f.call("PUT", otherRoute+"/grants/group-one", `{}`, next.Revision); w.Code != 403 {
 		t.Fatal("receiver reshared connection", w.Code)
 	}
 	access := f.call("GET", "/v1/managed-users/"+other.ID+"/vaults/group-one/access", "", "")
@@ -196,7 +196,7 @@ func TestManagedConnectionAccessIsOwnerOnly(t *testing.T) {
 			f := newManagedFixture(t)
 			ctx := context.Background()
 			first := f.create(basicConnection)
-			if w := f.call("PUT", f.base()+"/connections/"+first.ID+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != 200 {
+			if w := f.call("PUT", f.base()+"/connections/"+first.ID+"/grants/group-one", `{}`, ""); w.Code != 200 {
 				t.Fatal(w.Code, w.Body)
 			}
 			other, err := f.db.ReconcileManagedUser(ctx, store.ManagedUserInput{
@@ -216,7 +216,7 @@ func TestManagedConnectionAccessIsOwnerOnly(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &second); err != nil {
 				t.Fatal(err)
 			}
-			if w := f.call("PUT", base+"/connections/"+second.ID+"/grants/group-one", `{"services":["other-api"]}`, ""); w.Code != 200 {
+			if w := f.call("PUT", base+"/connections/"+second.ID+"/grants/group-one", `{}`, ""); w.Code != 200 {
 				t.Fatal(w.Code, w.Body)
 			}
 			for _, principal := range []struct{ base, own, hidden string }{
@@ -247,17 +247,17 @@ func TestManagedConnectionGrantSuspensionConflictAndNativeDisable(t *testing.T) 
 	ctx := context.Background()
 	c := f.create(basicConnection)
 	route := f.base() + "/connections/" + c.ID
-	if w := f.call("PUT", route+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != 200 {
+	if w := f.call("PUT", route+"/grants/group-one", `{}`, ""); w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
-	if w := f.call("PUT", route+"/grants/"+f.library, `{"services":["basic-api"]}`, ""); w.Code != 404 {
+	if w := f.call("PUT", route+"/grants/"+f.library, `{}`, ""); w.Code != 404 {
 		t.Fatal("personal library was a grant recipient", w.Code)
 	}
-	if w := f.call("PUT", route+"/grants/default", `{"services":["basic-api"]}`, ""); w.Code != 404 {
+	if w := f.call("PUT", route+"/grants/default", `{}`, ""); w.Code != 404 {
 		t.Fatal("system vault was a grant recipient", w.Code)
 	}
 	second := f.create(strings.Replace(basicConnection, `"Basic pair"`, `"Conflicting pair"`, 1))
-	if w := f.call("PUT", f.base()+"/connections/"+second.ID+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != 409 {
+	if w := f.call("PUT", f.base()+"/connections/"+second.ID+"/grants/group-one", `{}`, ""); w.Code != 409 {
 		t.Fatal("overlapping destination accepted", w.Code, w.Body)
 	}
 	v, _ := f.db.GetVault(ctx, "group-one")
@@ -277,28 +277,24 @@ func TestManagedConnectionGrantSuspensionConflictAndNativeDisable(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := f.call("PUT", route+"/grants/group-one", `{"services":["basic-api"]}`, c.Revision); w.Code != 200 {
+	if w := f.call("PUT", route+"/grants/group-one", `{}`, c.Revision); w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
 	c, err = f.s.loadConnection(ctx, c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Destination changes suspend recipients and preserve the old denied route.
+	// Recipients follow the connection's updated destinations without reapproval.
 	w := f.call("PUT", route, `{"services":[{"name":"basic-api","host":"other.example.com/v1/*","auth":{"type":"basic","username":"USERNAME","password":"PASSWORD"}}]}`, c.Revision)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
-	if _, err := f.s.CredentialProvider().Inject(ctx, v.ID, "api.example.com", 443, "/v1/x"); err == nil {
-		t.Fatal("superseded service fell through after policy edit")
-	}
-	var updated connection
-	json.Unmarshal(w.Body.Bytes(), &updated)
-	if w = f.call("PUT", route+"/grants/group-one", `{"services":["basic-api"]}`, updated.Revision); w.Code != 200 {
-		t.Fatal(w.Code, w.Body)
+	if result, err := f.s.CredentialProvider().Inject(ctx, v.ID, "api.example.com", 443, "/v1/x"); err == nil && result != nil &&
+		(len(result.CredentialKeys) > 0 || result.Headers["Authorization"] != "") {
+		t.Fatal("removed URL rule still received credentials")
 	}
 	if _, err := f.s.CredentialProvider().Inject(ctx, v.ID, "other.example.com", 443, "/v1/x"); err != nil {
-		t.Fatal("explicit reapproval failed", err)
+		t.Fatal("grant did not follow the updated destination", err)
 	}
 	user, _ := f.db.GetUserByID(ctx, f.user)
 	_, err = f.db.ReconcileManagedUser(ctx, store.ManagedUserInput{InstallationID: user.InstallationID, Subject: user.Subject, Active: false, Role: "no-access"})

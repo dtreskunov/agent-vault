@@ -161,11 +161,11 @@ func TestManagedMCPConnectionPinsDCRAndIndependentAuthorizations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status, revision string
-	if err = m.repo.db.QueryRow(`SELECT status,approved_revision FROM connection_grants WHERE connection_id=?`, first.Key).Scan(&status, &revision); err != nil || status != "suspended" {
-		t.Fatal("OAuth authority expansion broadened grant", err)
+	if err = m.repo.db.QueryRow(`SELECT status,approved_revision FROM connection_grants WHERE connection_id=?`, first.Key).Scan(&status, &revision); err != nil || status != "active" {
+		t.Fatal("OAuth authority expansion changed credential access", err)
 	}
-	if w = request(a.server.URL+"/token", "BIND_SYNTHETIC_ONE"); w.Code != 400 {
-		t.Fatal("suspended binding refreshed")
+	if w = request(a.server.URL+"/token", "BIND_SYNTHETIC_ONE"); w.Code != 200 {
+		t.Fatal("existing credential grant stopped following the connection")
 	}
 	// Removing a recipient does not revoke tokens or delete registrations.
 	if _, err = m.repo.db.Exec(`UPDATE connection_grants SET status='revoked' WHERE connection_id=?`, first.Key); err != nil {

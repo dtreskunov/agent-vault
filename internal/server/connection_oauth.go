@@ -94,9 +94,6 @@ func (s *Server) handleConnectionOAuthStart(w http.ResponseWriter, r *http.Reque
 		db, d := s.connectionSQL()
 		raw, _ := json.Marshal(scopes)
 		_, err = db.ExecContext(r.Context(), d.Rebind(`UPDATE connections SET scopes_json=?,revision=? WHERE id=? AND deleted=0`), string(raw), revision(), c.ID)
-		if err == nil {
-			_, err = db.ExecContext(r.Context(), d.Rebind(`UPDATE connection_grants SET status='suspended' WHERE connection_id=? AND status='active'`), c.ID)
-		}
 		unlock()
 		if err != nil {
 			jsonError(w, 500, "Scope update failed")

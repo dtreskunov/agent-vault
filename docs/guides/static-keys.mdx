@@ -30,7 +30,7 @@ not inherited by that user.
 Values use UPPER_SNAKE_CASE keys. Bearer, Basic pairs, API-key headers, multiple
 custom-header templates (`{{ KEY }}`), and scoped substitutions reuse native
 broker recipes. Services require explicit names and HTTPS. Each referenced key
-must belong to the same connection. Overlapping selected services are rejected,
+must belong to the same connection. Overlapping credential destinations are rejected,
 not resolved by private/shared precedence.
 
 The response contains safe connection metadata, key **names**, services, native
@@ -47,29 +47,32 @@ the user to review a conflict; never retry as an upsert.
 
 `values` patches named components, including new valid keys. Omitted components
 are retained. Rotation is encrypted once and is immediately used by all active
-references. Service-policy changes suspend grants until explicitly reapproved.
-Disabling a connection suspends use; reenabling does not silently reapprove it.
+references. Grants follow all current and future URL rules automatically.
+Disabling a connection blocks use; reenabling restores its active agent grants.
 
-## Share selected services
+## Share the whole credential
 
 ```http
 PUT /v1/managed-users/{user}/connections/{connection}/grants/{group-vault}
 If-None-Match: *
 Content-Type: application/json
 
-{"services":["example-api"]}
+{}
 ```
 
 The effective user must both own the connection and hold native destination
 vault-admin membership. Instance ownership does not substitute for membership.
 An existing grant returns `409` without an exact `If-Match` connection revision.
-Updates/reapproval require that exact current revision. Selected names must
-belong to the connection; receivers cannot retarget, rotate or reshare it.
+Updates/restoration require that exact current revision. A grant covers the whole
+credential, including future URL rules; service-selection fields are rejected.
+Existing partial grants become whole-credential grants without reapproval.
+Receivers cannot retarget, rotate or reshare the credential. Native ownership or
+destination-admin authority loss still pauses access until explicitly restored.
 
 Owner detach uses DELETE on the grant URL. Destination admins may instead use
 `DELETE /v1/managed-users/{user}/vaults/{vault}/access/{connection}`.
 `GET /.../vaults/{vault}/access` returns `{grants:[...]}` with only that group's
-connection references, owner labels, approved services and status.
+connection references, owner labels, current URL rules and availability status.
 
 Detachment never deletes the source or invokes upstream cleanup. Global
 connection deletion is owner-only and first revokes every recipient. There is

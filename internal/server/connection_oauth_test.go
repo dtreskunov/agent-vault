@@ -218,9 +218,8 @@ func TestManagedConnectionOAuthAppLifecycleAndRevocationDuringRefresh(t *testing
 	if c.Status != "ready" || len(c.Services) != 1 || c.Services[0].Auth.Token != c.ID || c.ScopeSource != "provider" {
 		t.Fatal("authorized OAuth service not derived from connection")
 	}
-	service := c.Services[0].Name
 	for _, group := range []string{"group-one", "group-two"} {
-		w = f.call("PUT", route+"/grants/"+group, fmt.Sprintf(`{"services":[%q]}`, service), "")
+		w = f.call("PUT", route+"/grants/"+group, `{}`, "")
 		if w.Code != 200 {
 			t.Fatal(w.Code, w.Body)
 		}
@@ -387,7 +386,7 @@ func TestManagedConnectionOAuthDeletionRevocationResponses(t *testing.T) {
 	}
 }
 
-func TestManagedConnectionOAuthScopeAndAppPolicySuspendGrants(t *testing.T) {
+func TestManagedConnectionOAuthScopeAndAppPolicyPreserveGrants(t *testing.T) {
 	f, _, c, state := setupManagedOAuth(t)
 	ctx := context.Background()
 	route := f.base() + "/connections/" + c.ID
@@ -398,7 +397,7 @@ func TestManagedConnectionOAuthScopeAndAppPolicySuspendGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := f.call("PUT", route+"/grants/group-one", fmt.Sprintf(`{"services":[%q]}`, c.Services[0].Name), "")
+	w := f.call("PUT", route+"/grants/group-one", `{}`, "")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
@@ -407,16 +406,19 @@ func TestManagedConnectionOAuthScopeAndAppPolicySuspendGrants(t *testing.T) {
 		t.Fatal(w.Code, w.Body)
 	}
 	one, _ := f.db.GetVault(ctx, "group-one")
-	if _, err = f.s.CredentialProvider().Inject(ctx, one.ID, "api.example.com", 443, "/"); err == nil {
-		t.Fatal("scope expansion silently broadened existing grant")
+	if _, err = f.s.CredentialProvider().Inject(ctx, one.ID, "api.example.com", 443, "/"); err != nil {
+		t.Fatal("starting new consent interrupted the existing authorization", err)
 	}
 	w = f.call("PUT", f.base()+"/oauth-apps/test-app?scope=user", `{"client_id":"changed-client","client_secret":"synthetic-new-secret"}`, "")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
 	c, err = f.s.loadConnection(ctx, c.ID)
-	if err != nil || c.Status != "needs_reconnect" || len(c.Grants) != 1 || c.Grants[0].Status != "suspended" {
-		t.Fatal("app binding change did not retain and suspend shared account", err)
+	if err != nil || c.Status != "needs_reconnect" || len(c.Grants) != 1 || c.Grants[0].Status != "active" {
+		t.Fatal("app binding change did not retain access while requiring owner reconnection", err)
+	}
+	if _, err = f.s.CredentialProvider().Inject(ctx, one.ID, "api.example.com", 443, "/"); err == nil {
+		t.Fatal("connection needing reconnection remained usable")
 	}
 	if w = f.call("POST", route+"/oauth/start", `{"app_id":"different-app"}`, ""); w.Code != 409 {
 		t.Fatal("connection OAuth app identity was retargeted", w.Code)

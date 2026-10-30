@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -37,7 +36,7 @@ func TestManagedGrantRevisionCoversRecipientUpdates(t *testing.T) {
 	ctx := context.Background()
 	c := f.create(`{"label":"Two services","kind":"static","values":{"KEY":"synthetic-key"},"services":[{"name":"first-api","host":"first.example.com","auth":{"type":"bearer","token":"KEY"}},{"name":"second-api","host":"second.example.com","auth":{"type":"bearer","token":"KEY"}}]}`)
 	route := f.base() + "/connections/" + c.ID + "/grants/group-one"
-	w := f.call("PUT", route, `{"services":["first-api"]}`, "")
+	w := f.call("PUT", route, `{}`, "")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
@@ -47,11 +46,11 @@ func TestManagedGrantRevisionCoversRecipientUpdates(t *testing.T) {
 	}
 	status := make(chan int, 2)
 	var wg sync.WaitGroup
-	for _, service := range []string{"first-api", "second-api"} {
+	for range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w := f.call("PUT", route, fmt.Sprintf(`{"services":[%q]}`, service), current.Revision)
+			w := f.call("PUT", route, `{}`, current.Revision)
 			status <- w.Code
 		}()
 	}

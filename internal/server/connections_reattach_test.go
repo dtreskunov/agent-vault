@@ -12,7 +12,7 @@ func TestManagedGrantFreshAttachNeverResurrectsOldBindingHandle(t *testing.T) {
 	ctx := context.Background()
 	c := f.create(basicConnection)
 	route := f.base() + "/connections/" + c.ID + "/grants/group-one"
-	if w := f.call("PUT", route, `{"services":["basic-api"]}`, ""); w.Code != 200 {
+	if w := f.call("PUT", route, `{}`, ""); w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
 	group, _ := f.db.GetVault(ctx, "group-one")
@@ -23,7 +23,7 @@ func TestManagedGrantFreshAttachNeverResurrectsOldBindingHandle(t *testing.T) {
 	if w := f.call("DELETE", route, "", ""); w.Code != 204 {
 		t.Fatal(w.Code, w.Body)
 	}
-	request := httptest.NewRequest("PUT", route, strings.NewReader(`{"services":["basic-api"]}`))
+	request := httptest.NewRequest("PUT", route, strings.NewReader(`{}`))
 	request.Header.Set("Authorization", "Bearer "+f.token)
 	request.Header.Set("If-None-Match", "*")
 	response := httptest.NewRecorder()

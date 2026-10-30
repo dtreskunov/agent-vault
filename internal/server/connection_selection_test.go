@@ -81,7 +81,7 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 		}
 		for _, group := range []string{"group-one", "group-two"} {
 			w = f.call("PUT", item.base+"/connections/"+item.c.ID+"/grants/"+group,
-				fmt.Sprintf(`{"services":[%q]}`, item.c.Services[0].Name), "")
+				`{}`, "")
 			if w.Code != http.StatusOK {
 				t.Fatal("explicitly selectable OAuth grants must coexist", w.Code, w.Body)
 			}
@@ -149,7 +149,7 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 		}
 	}
 	static := f.create(basicConnection)
-	if w = f.call("PUT", f.base()+"/connections/"+static.ID+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != http.StatusConflict {
+	if w = f.call("PUT", f.base()+"/connections/"+static.ID+"/grants/group-one", `{}`, ""); w.Code != http.StatusConflict {
 		t.Fatal("static/OAuth overlap was allowed", w.Code)
 	}
 	if w = f.call("GET", f.base()+"/connections/"+second.ID, "", ""); w.Code != http.StatusForbidden {
@@ -186,11 +186,11 @@ func TestManagedOAuthCannotOverlapStaticBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	static := f.create(basicConnection)
-	if w := f.call("PUT", f.base()+"/connections/"+static.ID+"/grants/group-one", `{"services":["basic-api"]}`, ""); w.Code != http.StatusOK {
+	if w := f.call("PUT", f.base()+"/connections/"+static.ID+"/grants/group-one", `{}`, ""); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body)
 	}
 	if w := f.call("PUT", f.base()+"/connections/"+oauth.ID+"/grants/group-one",
-		fmt.Sprintf(`{"services":[%q]}`, oauth.Services[0].Name), ""); w.Code != http.StatusConflict {
+		`{}`, ""); w.Code != http.StatusConflict {
 		t.Fatal("OAuth selection was allowed to shadow static credentials", w.Code, w.Body)
 	}
 }

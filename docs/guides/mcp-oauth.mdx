@@ -45,12 +45,12 @@ unchanged when present; RFC 9207 providers require it. Completion returns
 `{connection_id,status,account?,code?,error?}`, never a vault credential key.
 Anonymous browser completion cannot complete a managed flow.
 
-Refresh `GET /.../connections/{connection}` and explicitly grant names from its
-authorized `services` to group vaults. Drafts cannot be granted. Tokens,
+Refresh `GET /.../connections/{connection}` and grant the whole connection to a
+group vault with PUT `/.../grants/{vault}` and `{}`. Drafts cannot be granted. Tokens,
 refresh-token rotation and DCR client state stay central and encrypted. A
 `needs_reconnect` connection needs another owner consent, not registration by
-the container. Scope, identity or client-authority expansion suspends existing
-grants pending explicit reapproval.
+the container. Existing agent grants follow the connection's current and future
+URL rules and permissions approved by its owner, without separate reapproval.
 
 ## SDK placeholders (F8)
 
