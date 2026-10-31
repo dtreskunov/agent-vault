@@ -3,12 +3,24 @@ title: "Gateway releases"
 description: "Pinned, reproducible gateway binaries with checksums and provenance."
 ---
 
+## Current coordinated release
+
+`gw-v0.3.0` releases source `2c33abdec211328075b50b9280def06bf51b89d4`,
+including whole-credential grants, exact named-MCP bindings, overlapping OAuth
+selectors, API-key query placement and owner/OAuth lifecycle fixes.
+Whole-credential grants cover current and future URL rules. Existing
+service-only grants require explicit owner/recipient approval and reviewed
+offline adoption before upgrade; a startup migration is not permission to
+broaden access. Already-adopted query-placement canary state needs no repeated
+OAuth consent. Preserve matched database/configuration/executable rollback
+state and verify the published tag's signed provenance before installation.
+
 ## Build command
 
 From a checkout **or an export of the same commit**, run:
 
 ```bash
-GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.2.0 "$PWD/agent-vault"
+GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.3.0 "$PWD/agent-vault"
 ```
 
 This is the canonical gateway build command. The script selects the exact Go
@@ -59,15 +71,17 @@ publishes a release**. Download the workflow artifact for inspection:
 
 ```bash
 gh workflow run gateway-release.yml --repo dtreskunov/agent-vault \
-  --ref bananaclaw -f version=gw-v0.2.0
+  --ref bananaclaw -f version=gw-v0.3.0
 gh run list --repo dtreskunov/agent-vault --workflow gateway-release.yml
 gh run download <run-id> --repo dtreskunov/agent-vault \
   --name gateway-release --dir gateway-dry-run
 ```
 
-Run this dry-run successfully before tagging. `gw-v0.2.0` is the breaking
-shared-connection/native-user release; deploy it only with the coordinated
-NanoClaw host and reviewed offline state adoption. Tags are pushed only with
+Run this dry-run successfully before tagging. `gw-v0.2.0` introduced shared
+connections/native users; `gw-v0.3.0` additionally requires whole-credential
+authority and the matching named-binding/query-placement host contract.
+Deploy only with the coordinated NanoClaw host and reviewed state adoption.
+Tags are pushed only with
 operator release approval. No tag is created by the build command or manual
 workflow dispatch.
 
@@ -76,7 +90,7 @@ workflow dispatch.
 Pin the version and platform; do not install an unpinned `latest` binary:
 
 ```bash
-version=gw-v0.2.0
+version=gw-v0.3.0
 asset="agent-vault_${version}_linux_amd64"
 gh release download "$version" --repo dtreskunov/agent-vault \
   --pattern "$asset" --pattern SHA256SUMS --pattern build-provenance.jsonl
