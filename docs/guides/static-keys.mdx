@@ -27,9 +27,9 @@ not inherited by that user.
 }
 ```
 
-Values use UPPER_SNAKE_CASE keys. Authentication belongs to the whole credential:
-all its destinations must use the same recipe and value references. The wire
-format repeats that recipe inside each service for compatibility.
+Values use UPPER_SNAKE_CASE keys. Destinations can use independent authentication
+recipes and value references within the same connection. BananaClaw's simpler UI
+presents one shared recipe; that presentation does not restrict this API.
 Bearer, Basic pairs, API-key headers or query parameters, and custom-header
 templates (`{{ KEY }}`) reuse native broker recipes. Services require explicit names and HTTPS. Each referenced key
 must belong to the same connection. Overlapping credential destinations are rejected,

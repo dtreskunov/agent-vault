@@ -83,9 +83,11 @@ Fork-owned tables introduced together:
   identity, requested scopes, and deletion state.
   The 2026-10-31 credential-authentication update adds optional `auth.location`
   (`header` / `query`) and `auth.parameter` in `services_json`, not SQL columns
-  or a migration. Missing location retains header behavior. Connection writes
-  require one shared authentication recipe across destinations; existing
-  substitution records, values, revisions and grants are not rewritten.
+  or a migration. Missing location retains header behavior. The accompanying
+  same-authentication restriction was removed on 2026-10-31: destinations may
+  retain independent recipes. BananaClaw's shared-recipe UI is not a storage/API
+  invariant. Existing substitution records, values, revisions and grants are
+  not rewritten.
 - `connection_grants`: connection/group identity, access state, creator and
   unique group-bound `binding_handle`, plus the superseded snapshot columns
   described below.

@@ -350,7 +350,6 @@ func (s *Server) handleConnectionGet(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, c)
 }
 func normalizeConnectionServices(services []broker.Service, keys []string) error {
-	var recipe string
 	for i := range services {
 		services[i].Host, services[i].Path, services[i].Port = broker.SplitInlineHost(services[i].Host, services[i].Path)
 		services[i].HTTPSOnly = true
@@ -362,25 +361,6 @@ func normalizeConnectionServices(services []broker.Service, keys []string) error
 				return fmt.Errorf("service references unknown credential %s", key)
 			}
 		}
-		auth := services[i].Auth
-		if auth.Type == "api-key" && auth.Location != "query" {
-			auth.Location = "header"
-			if auth.Header == "" {
-				auth.Header = "Authorization"
-			}
-			auth.Header = strings.ToLower(auth.Header)
-		}
-		raw, err := json.Marshal(struct {
-			Auth          broker.Auth           `json:"auth"`
-			Substitutions []broker.Substitution `json:"substitutions,omitempty"`
-		}{auth, services[i].Substitutions})
-		if err != nil {
-			return fmt.Errorf("authentication recipe could not be encoded: %w", err)
-		}
-		if i > 0 && recipe != string(raw) {
-			return fmt.Errorf("all destinations must share the credential authentication")
-		}
-		recipe = string(raw)
 	}
 	if err := broker.Validate(&broker.Config{Vault: "connection", Services: services}); err != nil {
 		return err
