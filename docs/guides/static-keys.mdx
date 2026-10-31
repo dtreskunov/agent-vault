@@ -27,11 +27,25 @@ not inherited by that user.
 }
 ```
 
-Values use UPPER_SNAKE_CASE keys. Bearer, Basic pairs, API-key headers, multiple
-custom-header templates (`{{ KEY }}`), and scoped substitutions reuse native
-broker recipes. Services require explicit names and HTTPS. Each referenced key
+Values use UPPER_SNAKE_CASE keys. Authentication belongs to the whole credential:
+all its destinations must use the same recipe and value references. The wire
+format repeats that recipe inside each service for compatibility.
+Bearer, Basic pairs, API-key headers or query parameters, and custom-header
+templates (`{{ KEY }}`) reuse native broker recipes. Services require explicit names and HTTPS. Each referenced key
 must belong to the same connection. Overlapping credential destinations are rejected,
 not resolved by private/shared precedence.
+
+For an API key in a query parameter, use:
+
+```json
+{"type":"api-key","key":"API_KEY","location":"query","parameter":"api_key"}
+```
+
+The gateway adds the parameter and replaces any client-supplied duplicates.
+Agents call the normal upstream URL without a dummy value. Query placement does
+not accept a header or prefix. Omitted `location` keeps the existing header
+behavior, including the default `Authorization` header. Existing scoped
+substitution configurations continue to work and are not converted implicitly.
 
 The response contains safe connection metadata, key **names**, services, native
 owner, grants, status and an opaque quoted `revision`. It never contains values.

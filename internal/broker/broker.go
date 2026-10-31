@@ -93,10 +93,13 @@ type Auth struct {
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
 	Password string `yaml:"password,omitempty" json:"password,omitempty"`
 
-	// type: api-key — key credential, header name (default "Authorization"), optional prefix
-	Key    string `yaml:"key,omitempty" json:"key,omitempty"`
-	Header string `yaml:"header,omitempty" json:"header,omitempty"`
-	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	// API keys use a header (default Authorization) or a named query parameter.
+	// Prefix is supported only for header placement.
+	Key       string `yaml:"key,omitempty" json:"key,omitempty"`
+	Header    string `yaml:"header,omitempty" json:"header,omitempty"`
+	Prefix    string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	Location  string `yaml:"location,omitempty" json:"location,omitempty"`
+	Parameter string `yaml:"parameter,omitempty" json:"parameter,omitempty"`
 
 	// type: custom — arbitrary header templates with {{ CREDENTIAL }} placeholders
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
@@ -170,8 +173,21 @@ func (a *Auth) Validate() error {
 		if a.Key == "" {
 			return fmt.Errorf("auth: \"key\" is required for api-key auth")
 		}
-		if err := checkUnexpectedFields(a, "api-key", "key", "header", "prefix"); err != nil {
+		if err := checkUnexpectedFields(a, "api-key", "key", "header", "prefix", "location", "parameter"); err != nil {
 			return err
+		}
+		if a.Location != "" && a.Location != "header" && a.Location != "query" {
+			return fmt.Errorf("auth: API-key location must be header or query")
+		}
+		if a.Location == "query" {
+			if !regexp.MustCompile(`^[A-Za-z0-9._~-]{1,128}$`).MatchString(a.Parameter) {
+				return fmt.Errorf("auth: query placement requires a valid parameter name")
+			}
+			if a.Header != "" || a.Prefix != "" {
+				return fmt.Errorf("auth: query placement cannot specify a header or prefix")
+			}
+		} else if a.Parameter != "" {
+			return fmt.Errorf("auth: parameter is only valid for query placement")
 		}
 		return validateCredentialKey("key", a.Key)
 
@@ -236,6 +252,8 @@ func checkUnexpectedFields(a *Auth, authType string, allowed ...string) error {
 		{"key", a.Key != ""},
 		{"header", a.Header != ""},
 		{"prefix", a.Prefix != ""},
+		{"location", a.Location != ""},
+		{"parameter", a.Parameter != ""},
 		{"headers", len(a.Headers) > 0},
 	}
 
@@ -291,7 +309,7 @@ func credentialKeysFromHeaders(headers map[string]string) []string {
 	return keys
 }
 
-// Resolve resolves the auth config into a map of HTTP headers ready for attachment.
+// Resolve resolves header authentication; query placement uses ResolveQuery.
 // The getCredential function retrieves decrypted credential values by key name.
 func (a *Auth) Resolve(getCredential func(key string) (string, error)) (map[string]string, error) {
 	switch a.Type {
@@ -318,6 +336,12 @@ func (a *Auth) Resolve(getCredential func(key string) (string, error)) (map[stri
 		return map[string]string{"Authorization": "Basic " + encoded}, nil
 
 	case "api-key":
+		if a.Location == "query" {
+			return nil, nil
+		}
+		if a.Location != "" && a.Location != "header" {
+			return nil, fmt.Errorf("auth: unsupported API-key placement")
+		}
 		val, err := getCredential(a.Key)
 		if err != nil {
 			return nil, err
@@ -339,6 +363,21 @@ func (a *Auth) Resolve(getCredential func(key string) (string, error)) (map[stri
 	default:
 		return nil, fmt.Errorf("unsupported auth type %q", a.Type)
 	}
+}
+
+// ResolveQuery resolves only explicitly configured query placement.
+func (a *Auth) ResolveQuery(getCredential func(key string) (string, error)) (map[string]string, error) {
+	if a.Type != "api-key" || a.Location != "query" {
+		return nil, nil
+	}
+	if err := a.Validate(); err != nil {
+		return nil, err
+	}
+	value, err := getCredential(a.Key)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{a.Parameter: value}, nil
 }
 
 // Validate checks that a broker config is well-formed. Name is required

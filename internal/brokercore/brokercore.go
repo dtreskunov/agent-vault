@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Infisical/agent-vault/internal/broker"
@@ -80,6 +81,22 @@ var brokerScopedRequestHeaders = map[string]bool{
 // before forwarding to the target service.
 func IsBrokerScopedRequestHeader(name string) bool {
 	return brokerScopedRequestHeaders[http.CanonicalHeaderKey(name)]
+}
+
+// ApplyQueryInjection replaces all client values of each authentication parameter.
+func ApplyQueryInjection(target *url.URL, values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	query, err := url.ParseQuery(target.RawQuery)
+	if err != nil {
+		return errors.New("cannot inject authentication into a malformed query")
+	}
+	for name, value := range values {
+		query.Set(name, value)
+	}
+	target.RawQuery = query.Encode()
+	return nil
 }
 
 // ApplyInjection writes outbound headers for a resolved InjectResult.

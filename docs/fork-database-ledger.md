@@ -81,6 +81,11 @@ Fork-owned tables introduced together:
 - `connections`: stable ID, native owner and library foreign keys, label,
   kind/status, source `revision`, `services_json`, `keys_json`, resource/app
   identity, requested scopes, and deletion state.
+  The 2026-10-31 credential-authentication update adds optional `auth.location`
+  (`header` / `query`) and `auth.parameter` in `services_json`, not SQL columns
+  or a migration. Missing location retains header behavior. Connection writes
+  require one shared authentication recipe across destinations; existing
+  substitution records, values, revisions and grants are not rewritten.
 - `connection_grants`: connection/group identity, access state, creator and
   unique group-bound `binding_handle`, plus the superseded snapshot columns
   described below.

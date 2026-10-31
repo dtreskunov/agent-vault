@@ -32,7 +32,7 @@ func IsValidUnmatchedHostPolicy(p UnmatchedHostPolicy) bool {
 }
 
 // InjectResult is the outcome of matching (host, path) and resolving
-// credentials to ready-to-attach HTTP headers.
+// credentials to ready-to-attach HTTP headers and query parameters.
 type InjectResult struct {
 	// Authorize rechecks a shared binding while a long-lived operation is open.
 	// Nil for native local services.
@@ -41,6 +41,8 @@ type InjectResult struct {
 	// Add) so injected values win over client-supplied duplicates.
 	// Nil for passthrough services.
 	Headers map[string]string
+	// Query carries SECRET values and overrides client-supplied values.
+	Query map[string]string
 
 	// MatchedName/Host/Path/Port describe the matched service. Safe to log.
 	// Empty under unmatched-host passthrough.
@@ -275,8 +277,13 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	if err != nil {
 		return result, fmt.Errorf("%w: %v", ErrCredentialMissing, err)
 	}
+	query, err := matched.Auth.ResolveQuery(getCredential)
+	if err != nil {
+		return result, fmt.Errorf("%w: %v", ErrCredentialMissing, err)
+	}
 
 	result.Headers = headers
+	result.Query = query
 	result.Substitutions = resolvedSubs
 	return result, nil
 }

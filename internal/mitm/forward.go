@@ -18,6 +18,19 @@ import (
 	"github.com/Infisical/agent-vault/internal/requestlog"
 )
 
+func redactQueryError(err error, query map[string]string) string {
+	message := err.Error()
+	for _, value := range query {
+		if value == "" {
+			continue
+		}
+		for _, encoded := range []string{url.QueryEscape(value), url.PathEscape(value), value} {
+			message = strings.ReplaceAll(message, encoded, "[REDACTED]")
+		}
+	}
+	return message
+}
+
 type flushingWriter struct {
 	w io.Writer
 	f http.Flusher
@@ -345,6 +358,11 @@ func (p *Proxy) forwardRequest(
 		emit(http.StatusBadGateway, "substitution_error")
 		return
 	}
+	if err := brokercore.ApplyQueryInjection(outReq.URL, inject.Query); err != nil {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+		emit(http.StatusBadGateway, "query_injection_error")
+		return
+	}
 
 	if ce := outReq.Header.Get("Content-Encoding"); ce != "" {
 		p.logger.Debug("skipping body substitution for compressed request",
@@ -388,7 +406,7 @@ func (p *Proxy) forwardRequest(
 			slog.String("vault_id", scope.VaultID),
 			slog.String("vault_name", scope.VaultName),
 			slog.String("target_host", target),
-			slog.String("error", err.Error()),
+			slog.String("error", redactQueryError(err, inject.Query)),
 		)
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		emit(http.StatusBadGateway, "upstream_error")
@@ -398,7 +416,7 @@ func (p *Proxy) forwardRequest(
 	// OAuth 401 retry: if the upstream rejected the token and we have an
 	// OAuth credential, force-refresh and retry once. Only safe methods
 	// (GET/HEAD) are retried — the request body is consumed and cannot be replayed.
-	if resp.StatusCode == http.StatusUnauthorized && inject != nil && !inject.Passthrough &&
+	if resp.StatusCode == http.StatusUnauthorized && inject != nil && !inject.Passthrough && inject.Headers != nil &&
 		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		_ = resp.Body.Close()
 		retryInject, retryErr := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.URL.Path)
@@ -407,6 +425,7 @@ func (p *Proxy) forwardRequest(
 			for k, v := range retryInject.Headers {
 				retryReq.Header.Set(k, v)
 			}
+
 			retryReq.Body = http.NoBody
 			retryReq.ContentLength = 0
 			if retryResp, retryRTErr := p.upstream.RoundTrip(retryReq); retryRTErr == nil {
