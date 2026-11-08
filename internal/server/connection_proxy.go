@@ -107,8 +107,8 @@ func (s *Server) assertBindingDestinationsCompatible(ctx context.Context, vault,
 	}
 	for _, candidate := range selected {
 		for _, old := range occupied {
-			if candidate.Name == old.Name || serviceOverlap(candidate, old) {
-				return fmt.Errorf("a local or shared binding already occupies this service destination or name")
+			if serviceOverlap(candidate, old) {
+				return fmt.Errorf("a local or shared binding already occupies this service destination")
 			}
 		}
 	}

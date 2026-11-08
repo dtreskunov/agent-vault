@@ -86,6 +86,80 @@ func (f *managedFixture) create(body string) *connection {
 
 const basicConnection = `{"label":"Basic pair","kind":"static","values":{"USERNAME":"synthetic-user","PASSWORD":"synthetic-password"},"services":[{"name":"basic-api","host":"api.example.com/v1/*","auth":{"type":"basic","username":"USERNAME","password":"PASSWORD"}}]}`
 
+func TestManagedConnectionRuleNamesAreConnectionScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name, firstHost, secondHost, secondName, host, path string
+		wantStatus                                          int
+	}{
+		{"different hosts", "integrate.api.nvidia.com/*", "api.groq.com/openai/v1", "route-1", "api.groq.com", "/openai/v1", 200},
+		{"disjoint paths", "api.example.com/one/*", "api.example.com/two/*", "route-1", "api.example.com", "/two/items", 200},
+		{"overlapping destinations", "api.example.com/*", "api.example.com/v1/*", "different-rule", "", "", 409},
+		{"overlapping wildcard hosts", "*.example.com/*", "api.example.com/*", "different-rule", "", "", 409},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newManagedFixture(t)
+			ctx := context.Background()
+			first := f.create(fmt.Sprintf(`{"label":"First","kind":"static","values":{"TOKEN":"synthetic-first"},"services":[{"name":"route-1","host":%q,"auth":{"type":"bearer","token":"TOKEN"}}]}`, tc.firstHost))
+			second := f.create(fmt.Sprintf(`{"label":"Second","kind":"static","values":{"TOKEN":"synthetic-second"},"services":[{"name":%q,"host":%q,"auth":{"type":"bearer","token":"TOKEN"}}]}`, tc.secondName, tc.secondHost))
+			if w := f.call("PUT", f.base()+"/connections/"+first.ID+"/grants/group-one", `{}`, first.Revision); w.Code != 200 {
+				t.Fatal(w.Code, w.Body)
+			}
+			route := f.base() + "/connections/" + second.ID
+			w := f.call("PUT", route+"/grants/group-one", `{}`, second.Revision)
+			if w.Code != tc.wantStatus {
+				t.Fatal(w.Code, w.Body)
+			}
+			if tc.wantStatus == 409 {
+				if !strings.Contains(w.Body.String(), `"code":"binding_conflict"`) {
+					t.Fatal("missing destination conflict code", w.Body)
+				}
+				unchanged, err := f.s.loadConnection(ctx, second.ID)
+				if err != nil || len(unchanged.Grants) != 0 {
+					t.Fatal("conflicting grant changed access", err)
+				}
+				return
+			}
+			vault, err := f.db.GetVault(ctx, "group-one")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := f.s.CredentialProvider().Inject(ctx, vault.ID, tc.host, 443, tc.path)
+			if err != nil || result.Headers["Authorization"] != "Bearer synthetic-second" {
+				t.Fatal("duplicate rule name selected the wrong credential", err)
+			}
+			services, _, err := f.s.sharedDiscovery(ctx, vault.ID)
+			if err != nil || len(services) != 2 {
+				t.Fatal("missing shared discovery services", err)
+			}
+			if services[0].Name != "route-1" || services[1].Name != "route-1" ||
+				services[0].ConnectionID == services[1].ConnectionID ||
+				services[0].BindingHandle == services[1].BindingHandle {
+				t.Fatal("discovery lost connection-scoped identities", services)
+			}
+			current, err := f.s.loadConnection(ctx, second.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			update := fmt.Sprintf(`{"services":[{"name":"route-1","host":%q,"auth":{"type":"bearer","token":"TOKEN"}}]}`, tc.secondHost)
+			if w = f.call("PUT", route, update, current.Revision); w.Code != 200 {
+				t.Fatal("same-name rules blocked a connection update", w.Code, w.Body)
+			}
+			current, err = f.s.loadConnection(ctx, second.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			update = fmt.Sprintf(`{"services":[{"name":"different-rule","host":%q,"auth":{"type":"bearer","token":"TOKEN"}}]}`, tc.firstHost)
+			if w = f.call("PUT", route, update, current.Revision); w.Code != 409 ||
+				!strings.Contains(w.Body.String(), `"code":"binding_conflict"`) {
+				t.Fatal("overlapping update was accepted", w.Code, w.Body)
+			}
+			if _, err = f.s.CredentialProvider().Inject(ctx, vault.ID, tc.host, 443, tc.path); err != nil {
+				t.Fatal("rejected update changed existing authorization", err)
+			}
+		})
+	}
+}
+
 func TestManagedConnectionStaticSharingAndAuthorization(t *testing.T) {
 	f := newManagedFixture(t)
 	ctx := context.Background()

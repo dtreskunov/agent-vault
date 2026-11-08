@@ -107,6 +107,10 @@ placeholder; ambiguous requests without a selection fail closed. Discovery and
 `vault discover` expose the access placeholder and whether selection is required.
 Unknown, revoked or cross-group selections never fall through to another account.
 Static/static and static/OAuth destination conflicts remain rejected.
+Service names are scoped to their connection: different connections may reuse a
+name such as `route-1` when their destinations do not overlap. Names must still
+be unique within each connection; changing a name cannot bypass destination
+conflict checks on grants or service updates.
 Scoped discovery also exposes each authorized service's `connection_id`,
 `connection_kind` and nonsecret `binding_handle`. Hosts can resolve explicit
 MCP connection references without enumerating personal libraries. The internal
