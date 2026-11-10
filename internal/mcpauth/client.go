@@ -53,6 +53,10 @@ func (m *Manager) registeredClient(ctx context.Context, vault string, discovery 
 		}, m.client)
 	if err != nil {
 		// Do not expose registration response bodies, which may contain credentials.
+		var rejected *oauthex.ClientRegistrationError
+		if errors.As(err, &rejected) && rejected.ErrorCode == "invalid_redirect_uri" {
+			return nil, failure("registration_failed", "MCP authorization server rejected the configured OAuth callback URL (invalid_redirect_uri). Ask the provider to allow this callback or configure an approved OAuth client.")
+		}
 		return nil, failure("registration_failed", "MCP dynamic client registration failed")
 	}
 	method := registration.TokenEndpointAuthMethod

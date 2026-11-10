@@ -82,10 +82,17 @@ sockets cannot bind personal libraries. The host authenticates transport;
 designated managed APIs enforce the effective native user's authority.
 Connection metadata, including group-access listings, is visible only to its
 owner; native instance-owner or destination-admin roles do not bypass this.
+OAuth apps can supply non-secret `token_headers` for providers such as Stripe
+Link during exchange, refresh and RFC 7009 revocation. These are visible app
+settings, not a place to store private credentials.
 This does not change the group's explicitly authorized runtime use.
 Managed OAuth sign-in accepts a validated `client_name` from the trusted host
 for DCR consent display. Registrations remain isolated by connection ID even
 when their friendly names are identical.
+If DCR rejects the callback with `invalid_redirect_uri`, the error identifies the
+callback rejection without exposing provider response bodies. Ask the provider
+to allow `AGENT_VAULT_OAUTH_REDIRECT_URL` or configure an approved OAuth client;
+changing scopes cannot resolve a provider callback allowlist.
 Managed scope inspection reads resource/issuer metadata without registering a
 client or changing OAuth state. Resource-advertised scopes take precedence over
 authorization-server options; missing metadata is not an implicit permission

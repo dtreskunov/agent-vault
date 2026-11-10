@@ -42,6 +42,7 @@ func (m *Manager) Credential(ctx context.Context, vault, key string) (*store.Cre
 				Client: m.client, TokenURL: account.Metadata.TokenEndpoint, ClientID: account.Client.ID,
 				ClientSecret: account.Client.Secret, TokenAuthMethod: account.Client.AuthMethod,
 				RefreshToken: account.RefreshToken, Scopes: account.Scopes, Resource: account.Resource,
+				TokenHeaders: account.Client.Config.TokenHeaders,
 			})
 			if err != nil {
 				if invalidClient(err) && account.Client.Kind == "registered" {

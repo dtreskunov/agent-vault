@@ -161,7 +161,7 @@ func (m *Manager) Complete(ctx context.Context, input oauthrelay.Input, authoriz
 	token, err := oauth.Exchange(ctx, oauth.ExchangeConfig{
 		Client: m.client, TokenURL: a.Metadata.TokenEndpoint, ClientID: a.Client.ID, ClientSecret: a.Client.Secret,
 		TokenAuthMethod: a.Client.AuthMethod, Code: input.Code, CodeVerifier: flow.Verifier,
-		RedirectURI: flow.RedirectURI, Resource: a.Resource,
+		RedirectURI: flow.RedirectURI, Resource: a.Resource, TokenHeaders: a.Client.Config.TokenHeaders,
 	})
 	if err != nil {
 		if invalidClient(err) && a.Client.Kind == "registered" {

@@ -102,6 +102,37 @@ func TestConfiguredAppsOverrideAndAmbiguity(t *testing.T) {
 	}
 }
 
+func TestAppTokenHeadersMergeAndValidation(t *testing.T) {
+	input := testAppInput("github", "client", new("synthetic-secret"))
+	input.TokenHeaders = &map[string]string{"authorization": "Bearer pk_test_synthetic"}
+	client, err := configureApp("custom-app", nil, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Config.TokenHeaders["Authorization"] != "Bearer pk_test_synthetic" {
+		t.Fatal("header names were not canonicalized")
+	}
+	unchanged, err := configureApp("custom-app", &client, AppInput{})
+	if err != nil || unchanged.Config.TokenHeaders["Authorization"] == "" {
+		t.Fatal("omitted headers did not preserve configuration", err)
+	}
+	cleared, err := configureApp("custom-app", &client, AppInput{TokenHeaders: &map[string]string{}})
+	if err != nil || len(cleared.Config.TokenHeaders) != 0 || cleared.Secret != client.Secret {
+		t.Fatal("explicit header clear failed or changed the client secret", err)
+	}
+	if _, err := configureApp("custom-app", &client, AppInput{AuthMethod: new("client_secret_basic"), ClientSecret: new("synthetic-secret")}); err == nil {
+		t.Fatal("accepted a Basic authentication conflict")
+	}
+	for _, headers := range []map[string]string{
+		{"Host": "other.example"}, {"Content-Type": "application/json"},
+		{"X-Key": "one", "x-key": "two"}, {"X-Key": "bad\r\nvalue"},
+	} {
+		if _, err := configureApp("custom-app", &client, AppInput{TokenHeaders: &headers}); err == nil {
+			t.Fatal("accepted unsafe app headers")
+		}
+	}
+}
+
 func TestScopeReportingDoesNotInventGrants(t *testing.T) {
 	a := Account{RequestedScopes: []string{"requested"}, Scopes: "requested", ScopeSource: "requested", Client: Client{Config: AppConfig{TokenScopeSeparator: "comma"}}}
 	if err := recordScopes(&a, "repo,read:user"); err != nil {

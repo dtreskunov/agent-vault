@@ -3,6 +3,7 @@ package mcpauth
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/Infisical/agent-vault/internal/broker"
+	"github.com/Infisical/agent-vault/internal/oauth"
 )
 
 type AppConfig struct {
@@ -20,6 +22,7 @@ type AppConfig struct {
 	APIHosts              []string          `json:"api_hosts"`
 	DefaultScopes         []string          `json:"default_scopes"`
 	AuthorizationParams   map[string]string `json:"authorization_params,omitempty"`
+	TokenHeaders          map[string]string `json:"token_headers,omitempty"`
 	RevocationEndpoint    string            `json:"revocation_endpoint,omitempty"`
 	Identity              string            `json:"identity"`
 	JWKSURI               string            `json:"jwks_uri,omitempty"`
@@ -37,6 +40,7 @@ type AppInput struct {
 	APIHosts              *[]string          `json:"api_hosts,omitempty"`
 	DefaultScopes         *[]string          `json:"default_scopes,omitempty"`
 	AuthorizationParams   *map[string]string `json:"authorization_params,omitempty"`
+	TokenHeaders          *map[string]string `json:"token_headers,omitempty"`
 	RevocationEndpoint    *string            `json:"revocation_endpoint,omitempty"`
 	Identity              *string            `json:"identity,omitempty"`
 	JWKSURI               *string            `json:"jwks_uri,omitempty"`
@@ -85,6 +89,9 @@ func configureApp(id string, old *Client, input AppInput) (Client, error) {
 	if input.AuthorizationParams != nil {
 		next.Config.AuthorizationParams = *input.AuthorizationParams
 	}
+	if input.TokenHeaders != nil {
+		next.Config.TokenHeaders = *input.TokenHeaders
+	}
 	next.AppID = id
 	if old != nil && !sameAppBinding(*old, next) {
 		next.Secret = ""
@@ -120,6 +127,14 @@ func configureApp(id string, old *Client, input AppInput) (Client, error) {
 	default:
 		return Client{}, failure("invalid_app", "Unsupported token_endpoint_auth_method")
 	}
+	if err := oauth.ValidateTokenHeaders(next.Config.TokenHeaders, next.Config.AuthMethod); err != nil {
+		return Client{}, failure("invalid_app", err.Error())
+	}
+	headers := make(map[string]string, len(next.Config.TokenHeaders))
+	for name, value := range next.Config.TokenHeaders {
+		headers[http.CanonicalHeaderKey(name)] = value
+	}
+	next.Config.TokenHeaders = headers
 	if !slices.Contains([]string{"none", "oidc", "google", "github"}, next.Config.Identity) {
 		return Client{}, failure("invalid_app", "Unsupported identity verifier")
 	}

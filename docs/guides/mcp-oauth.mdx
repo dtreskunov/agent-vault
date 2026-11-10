@@ -28,6 +28,17 @@ including multiple accounts at the same resource in the same user's library.
 There is no automatic account merge or scope union. An explicit app resolves
 ambiguous issuer configurations. MCP services remain resource/path/port scoped.
 
+### Callback rejected during registration
+
+A `registration_failed` response mentioning `invalid_redirect_uri` means the
+authorization server rejected the configured OAuth callback URL. Valid discovery
+metadata and an empty scope list do not imply that arbitrary web callbacks are
+accepted. Ask the provider to allow `AGENT_VAULT_OAUTH_REDIRECT_URL`, or configure
+an approved OAuth app/client for the same issuer. Do not substitute another
+application's callback or a loopback URL that the deployed host cannot receive.
+Provider error descriptions and registration response bodies remain hidden
+because they can contain credentials.
+
 The authenticated callback relay sends:
 
 ```http

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -171,6 +172,7 @@ func (m *Manager) validateFlowClient(ctx context.Context, vault string, a *Accou
 		return failure("needs_reconnect", "OAuth app changed; start a new sign-in")
 	}
 	a.Client.Secret = current.Secret
+	a.Client.Config.TokenHeaders = maps.Clone(current.Config.TokenHeaders)
 	return nil
 }
 

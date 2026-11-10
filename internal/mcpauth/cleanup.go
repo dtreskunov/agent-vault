@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Infisical/agent-vault/internal/oauth"
 )
 
 func (m *Manager) revoke(ctx context.Context, account *Account) error {
@@ -52,6 +54,11 @@ func (m *Manager) revoke(ctx context.Context, account *Account) error {
 			continue
 		}
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if err := oauth.ApplyTokenHeaders(request, account.Client.Config.TokenHeaders, account.Client.AuthMethod); err != nil {
+			m.logger.Warn("MCP token revocation headers invalid", "key", account.Key)
+			failures = append(failures, err)
+			continue
+		}
 		if account.Client.AuthMethod == "client_secret_basic" {
 			request.SetBasicAuth(account.Client.ID, account.Client.Secret)
 		}

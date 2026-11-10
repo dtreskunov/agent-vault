@@ -17,7 +17,7 @@ an active native managed user whose own roles/memberships are enforced.
 Omitted scope means `user`. App IDs are canonical slugs. PUT accepts native raw
 `AppInput`: `issuer`, `client_id`, write-only `client_secret`, `label`,
 `authorization_endpoint`, `token_endpoint`, `token_endpoint_auth_method`,
-`api_hosts`, `default_scopes`, `authorization_params`, `revocation_endpoint`,
+`api_hosts`, `default_scopes`, `authorization_params`, `token_headers`, `revocation_endpoint`,
 `identity`, `jwks_uri`, and `token_scope_separator`. Auth method `none` is
 public-client mode; confidential identity changes require a supplied secret.
 
@@ -28,6 +28,49 @@ override an install config, but a connection pins its actual issuing source and
 client. Secret-only rotation updates that central pinned client; identity
 changes or app deletion mark affected connections `needs_reconnect`. Agent access
 settings remain intact, but use is blocked until the owner signs in again.
+
+## Additional token request headers
+
+Some providers require public application metadata in HTTP headers as well as
+the standard OAuth client credentials. Configure `token_headers` as a map of
+header names to non-secret string values. These settings are visible in
+`AppInfo`: never put client secrets, private API keys, access tokens or refresh
+tokens here. Keep the client secret in its separate write-only field.
+
+Headers are sent only to the token endpoint during code exchange and refresh,
+and to the configured RFC 7009 revocation endpoint during disconnect. They are
+not sent to discovery, the authorization URL, identity lookup or ordinary API
+requests. GitHub's dedicated API-based revocation keeps its required HTTP Basic
+authentication rather than using these headers.
+
+For example, Stripe Link requires a publishable key in the authorization URL
+and in the token/revocation `Authorization` header, in addition to the registered
+OAuth client's ID and body secret:
+
+```json
+{
+  "issuer": "https://login.link.com",
+  "client_id": "YOUR_REGISTERED_CLIENT_ID",
+  "token_endpoint_auth_method": "client_secret_post",
+  "authorization_params": { "key": "pk_live_YOUR_PUBLISHABLE_KEY" },
+  "token_headers": { "Authorization": "Bearer pk_live_YOUR_PUBLISHABLE_KEY" }
+}
+```
+
+Apply through [Link's hosted OAuth registration](https://docs.stripe.com/agentic-commerce/agents/link-agent-wallet/oauth),
+register the exact configured gateway redirect URI and supply `client_secret`
+separately. For direct API connections also configure the OAuth endpoints,
+`api_hosts` and scopes; MCP connections can discover endpoints from their resource.
+This is not Stripe Connect or Stripe's merchant MCP.
+
+Header names are case-insensitive, normalized on save, and must be unique.
+Values must be printable ASCII. Transport/framing and cookie headers are
+rejected. An `Authorization` header cannot be combined with
+`client_secret_basic`, which already owns that header.
+
+Omitting `token_headers` on update preserves them; `{}` clears them. Header-only
+rotation updates existing accounts and pending exchanges without changing
+client IDs, tokens, scopes or grants, just like client-secret rotation.
 
 ## Connect an API account
 

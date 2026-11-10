@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,8 +38,10 @@ type authority struct {
 	refresh                                                     map[string]string
 	metadata                                                    bool
 	register                                                    bool
+	registrationError                                           *oauthex.ClientRegistrationError
 	secret                                                      bool
 	names                                                       []string
+	tokenHeaders                                                map[string]string
 }
 
 func newAuthority(t *testing.T, manager *Manager) *authority {
@@ -49,6 +52,15 @@ func newAuthority(t *testing.T, manager *Manager) *authority {
 		defer a.mu.Unlock()
 		base := a.server.URL
 		w.Header().Set("Content-Type", "application/json")
+		for name, value := range a.tokenHeaders {
+			want := ""
+			if r.URL.Path == "/token" || r.URL.Path == "/revoke" {
+				want = value
+			}
+			if r.Header.Get(name) != want {
+				t.Errorf("additional header %s missing from token lifecycle or leaked to discovery", name)
+			}
+		}
 		switch r.URL.Path {
 		case "/mcp":
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource/mcp"`)
@@ -76,6 +88,11 @@ func newAuthority(t *testing.T, manager *Manager) *authority {
 			json.NewEncoder(w).Encode(metadata)
 		case "/register":
 			a.registrations++
+			if a.registrationError != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(a.registrationError)
+				return
+			}
 			var input oauthex.ClientRegistrationMetadata
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Error(err)
@@ -98,6 +115,9 @@ func newAuthority(t *testing.T, manager *Manager) *authority {
 			json.NewEncoder(w).Encode(registration)
 		case "/token":
 			r.ParseForm()
+			if len(a.tokenHeaders) != 0 && r.Form.Get("client_secret") != "synthetic-secret" {
+				t.Error("token headers replaced confidential client authentication")
+			}
 			if a.invalid {
 				w.WriteHeader(401)
 				fmt.Fprint(w, `{"error":"invalid_client","error_description":"must not expose synthetic-secret"}`)
@@ -226,6 +246,44 @@ func TestConfidentialRegistration(t *testing.T) {
 	}
 	if _, err := m.Credential(context.Background(), vault, account.Key); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRegistrationFailureRedaction(t *testing.T) {
+	for _, code := range []string{"invalid_redirect_uri", "invalid_client_metadata", "synthetic-secret"} {
+		t.Run(code, func(t *testing.T) {
+			m, _, vault := testManager(t)
+			a := newAuthority(t, m)
+			a.registrationError = &oauthex.ClientRegistrationError{
+				ErrorCode: code, ErrorDescription: "must not expose synthetic-secret",
+			}
+			_, err := m.Start(context.Background(), vault, a.server.URL+"/mcp")
+			var rejected *Failure
+			if !errors.As(err, &rejected) || rejected.Code != "registration_failed" {
+				t.Fatalf("expected registration_failed, got %v", err)
+			}
+			if strings.Contains(rejected.Message, "synthetic-secret") {
+				t.Fatal("provider registration failure exposed untrusted details")
+			}
+			if code == "invalid_redirect_uri" {
+				if !strings.Contains(rejected.Message, "OAuth callback URL (invalid_redirect_uri)") ||
+					!strings.Contains(rejected.Message, "approved OAuth client") {
+					t.Fatalf("callback rejection lacks actionable explanation: %s", rejected.Message)
+				}
+			} else if rejected.Message != "MCP dynamic client registration failed" {
+				t.Fatalf("unexpected fallback message: %s", rejected.Message)
+			}
+			if a.registrations != 1 || a.exchanges != 0 {
+				t.Fatal("failed registration retried or exchanged tokens")
+			}
+			var records int
+			if err := m.repo.db.QueryRow(`SELECT count(*) FROM gateway_oauth_records WHERE vault_id=? AND kind IN ('client','state')`, vault).Scan(&records); err != nil {
+				t.Fatal(err)
+			}
+			if records != 0 {
+				t.Fatal("failed registration retained a client or consent state")
+			}
+		})
 	}
 }
 

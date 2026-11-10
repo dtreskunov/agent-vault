@@ -5,9 +5,15 @@ description: "Pinned, reproducible gateway binaries with checksums and provenanc
 
 ## Current coordinated release
 
-`gw-v0.3.0` releases source `2c33abdec211328075b50b9280def06bf51b89d4`,
-including whole-credential grants, exact named-MCP bindings, overlapping OAuth
-selectors, API-key query placement and owner/OAuth lifecycle fixes.
+`gw-v0.4.0` adds validated non-secret OAuth token headers for hosted providers
+such as Stripe Link, including code exchange, refresh, RFC 7009 revocation and
+rotation for existing connections and pending sign-ins. It also includes the
+connection-scoped service-name collision fix and preserves the deployed canary's
+redacted, actionable callback-registration errors. No database conversion or repeated
+consent is required when upgrading the already-adopted `gw-v0.3.0` installation.
+The release tag and signed build provenance bind the exact source commit.
+It retains whole-credential grants, exact named-MCP bindings, overlapping OAuth
+selectors, API-key query placement and owner/OAuth lifecycle fixes from `gw-v0.3.0`.
 Whole-credential grants cover current and future URL rules. Existing
 service-only grants require explicit owner/recipient approval and reviewed
 offline adoption before upgrade; a startup migration is not permission to
@@ -20,7 +26,7 @@ state and verify the published tag's signed provenance before installation.
 From a checkout **or an export of the same commit**, run:
 
 ```bash
-GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.3.0 "$PWD/agent-vault"
+GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.4.0 "$PWD/agent-vault"
 ```
 
 This is the canonical gateway build command. The script selects the exact Go
@@ -71,7 +77,7 @@ publishes a release**. Download the workflow artifact for inspection:
 
 ```bash
 gh workflow run gateway-release.yml --repo dtreskunov/agent-vault \
-  --ref bananaclaw -f version=gw-v0.3.0
+  --ref bananaclaw -f version=gw-v0.4.0
 gh run list --repo dtreskunov/agent-vault --workflow gateway-release.yml
 gh run download <run-id> --repo dtreskunov/agent-vault \
   --name gateway-release --dir gateway-dry-run
@@ -90,7 +96,7 @@ workflow dispatch.
 Pin the version and platform; do not install an unpinned `latest` binary:
 
 ```bash
-version=gw-v0.3.0
+version=gw-v0.4.0
 asset="agent-vault_${version}_linux_amd64"
 gh release download "$version" --repo dtreskunov/agent-vault \
   --pattern "$asset" --pattern SHA256SUMS --pattern build-provenance.jsonl

@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // TokenResponse holds the parsed token endpoint response.
@@ -36,6 +38,7 @@ type ExchangeConfig struct {
 	RedirectURI     string
 	CodeVerifier    string
 	TokenAuthMethod string // "client_secret_post" (default) or "client_secret_basic"
+	TokenHeaders    map[string]string
 }
 
 // RefreshConfig configures a refresh-token grant.
@@ -49,6 +52,7 @@ type RefreshConfig struct {
 	Scopes          string
 	ScopeSeparator  string // defaults to " " (space)
 	TokenAuthMethod string // "client_secret_post" (default) or "client_secret_basic"
+	TokenHeaders    map[string]string
 }
 
 // TokenError is returned when the token endpoint responds with a non-2xx status.
@@ -99,6 +103,9 @@ func Exchange(ctx context.Context, cfg ExchangeConfig) (*TokenResponse, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
+	if err := ApplyTokenHeaders(req, cfg.TokenHeaders, authMethod); err != nil {
+		return nil, err
+	}
 	if authMethod == "client_secret_basic" && cfg.ClientSecret != "" {
 		req.SetBasicAuth(cfg.ClientID, cfg.ClientSecret)
 	}
@@ -140,11 +147,53 @@ func Refresh(ctx context.Context, cfg RefreshConfig) (*TokenResponse, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
+	if err := ApplyTokenHeaders(req, cfg.TokenHeaders, authMethod); err != nil {
+		return nil, err
+	}
 	if authMethod == "client_secret_basic" && cfg.ClientSecret != "" {
 		req.SetBasicAuth(cfg.ClientID, cfg.ClientSecret)
 	}
 
 	return doTokenRequest(req, cfg.Client)
+}
+
+// Token headers are public app metadata, used only for token requests and RFC 7009 revocation.
+func ValidateTokenHeaders(headers map[string]string, authMethod string) error {
+	seen := make(map[string]bool, len(headers))
+	for name, value := range headers {
+		if !httpguts.ValidHeaderFieldName(name) {
+			return fmt.Errorf("OAuth token headers require valid HTTP header names")
+		}
+		key := http.CanonicalHeaderKey(name)
+		if seen[key] {
+			return fmt.Errorf("OAuth token header names must be unique regardless of case")
+		}
+		seen[key] = true
+		if strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+			return fmt.Errorf("OAuth token header values must contain only printable ASCII characters")
+		}
+		switch key {
+		case "Host", "Content-Length", "Content-Type", "Content-Encoding", "Transfer-Encoding",
+			"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Proxy-Connection",
+			"Te", "Trailer", "Upgrade", "Cookie", "Set-Cookie":
+			return fmt.Errorf("OAuth token headers cannot override HTTP transport or cookie headers")
+		case "Authorization":
+			if authMethod == "client_secret_basic" {
+				return fmt.Errorf("OAuth token Authorization header conflicts with HTTP Basic client authentication")
+			}
+		}
+	}
+	return nil
+}
+
+func ApplyTokenHeaders(req *http.Request, headers map[string]string, authMethod string) error {
+	if err := ValidateTokenHeaders(headers, authMethod); err != nil {
+		return err
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	return nil
 }
 
 // applyClientAuth adds client credentials to the form body when using

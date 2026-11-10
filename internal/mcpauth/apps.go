@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -398,8 +399,9 @@ func (m *Manager) changeApp(ctx context.Context, vault, id string, old, next *Cl
 					return err
 				}
 			}
-		} else if old.Secret != next.Secret {
+		} else if old.Secret != next.Secret || !maps.Equal(old.Config.TokenHeaders, next.Config.TokenHeaders) {
 			a.value.Client.Secret, a.value.Client.UpdatedAt = next.Secret, next.UpdatedAt
+			a.value.Client.Config.TokenHeaders = maps.Clone(next.Config.TokenHeaders)
 			if err := m.repo.writeAccount(ctx, tx, a.vault, &a.value, false); err != nil {
 				return err
 			}

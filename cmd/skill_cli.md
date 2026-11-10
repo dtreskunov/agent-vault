@@ -68,6 +68,11 @@ OAuth apps use GET `/v1/managed-users/{user}/oauth-apps` and PUT/DELETE
 `/oauth-apps/{app}?scope=user|install`. Only an effective native owner may
 manage install apps. Metadata exposes generic config and source, never secrets.
 There is no provider catalog or group-owned app/account API.
+App configuration accepts `token_headers` for non-secret provider metadata
+(for example, Stripe Link's publishable-key Authorization header). Values are
+visible app settings, used only for exchange, refresh and RFC 7009 revocation.
+Never put private keys or tokens there. Omit to preserve; `{}` clears. HTTP Basic
+authentication cannot be combined with a token `Authorization` override.
 
 For stdio SDKs use `av-refresh:<BIND_... handle>` and
 `av-access:<BIND_... handle>` from the group's authorized access metadata,
