@@ -44,6 +44,15 @@ Designated host APIs select that native user in
 in `If-Match`; missing/stale preconditions return `428`/`412`, not an upsert.
 All secret values stay write-only.
 
+Normal DELETE retains a disabled connection when upstream OAuth cleanup fails.
+Only after explicit owner confirmation, a disabled OAuth connection with no
+remaining agent grants may use DELETE `?local_only=true` with the latest exact
+`If-Match` revision. GET advertises `local_only_removal_allowed` for this action.
+This removes local encrypted account/client/pending-consent state without
+contacting the provider; upstream authorization may remain valid and cleanup
+cannot be retried afterward. Never silently substitute local removal for
+disconnect or claim that it revoked the provider authorization.
+
 Explicit sharing uses PUT `/connections/{connection}/grants/{vault}`
 `{}`. A grant covers the whole credential and all current and future URL rules;
 service selectors are rejected. The effective user must own the

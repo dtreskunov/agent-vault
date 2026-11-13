@@ -34,23 +34,24 @@ type connectionGrant struct {
 	Status   string   `json:"status"`
 }
 type connection struct {
-	ID              string            `json:"id"`
-	Label           string            `json:"label"`
-	Kind            string            `json:"kind"`
-	Status          string            `json:"status"`
-	Revision        string            `json:"revision"`
-	Owner           connectionOwner   `json:"owner"`
-	Services        []broker.Service  `json:"services"`
-	Credentials     []string          `json:"credentials"`
-	Grants          []connectionGrant `json:"grants"`
-	ResourceURL     string            `json:"resource_url,omitempty"`
-	AppID           string            `json:"app_id,omitempty"`
-	RequestedScopes []string          `json:"requested_scopes"`
-	GrantedScopes   []string          `json:"granted_scopes"`
-	ScopeSource     string            `json:"scope_source,omitempty"`
-	Account         *string           `json:"account"`
-	library         string
-	sourceRevision  string
+	ID                      string            `json:"id"`
+	Label                   string            `json:"label"`
+	Kind                    string            `json:"kind"`
+	Status                  string            `json:"status"`
+	Revision                string            `json:"revision"`
+	Owner                   connectionOwner   `json:"owner"`
+	Services                []broker.Service  `json:"services"`
+	Credentials             []string          `json:"credentials"`
+	Grants                  []connectionGrant `json:"grants"`
+	ResourceURL             string            `json:"resource_url,omitempty"`
+	AppID                   string            `json:"app_id,omitempty"`
+	RequestedScopes         []string          `json:"requested_scopes"`
+	GrantedScopes           []string          `json:"granted_scopes"`
+	ScopeSource             string            `json:"scope_source,omitempty"`
+	Account                 *string           `json:"account"`
+	LocalOnlyRemovalAllowed bool              `json:"local_only_removal_allowed,omitempty"`
+	library                 string
+	sourceRevision          string
 }
 type connectionInput struct {
 	Label       string            `json:"label"`
@@ -276,6 +277,7 @@ func (s *Server) loadConnection(ctx context.Context, id string) (*connection, er
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+	c.LocalOnlyRemovalAllowed = s.mcpOAuth != nil && c.Kind != "static" && c.Status == "disabled" && len(c.Grants) == 0
 	// Recipient edits affect the wire ETag, not the source-policy revision used
 	// to invalidate in-flight requests after changes to the credential itself.
 	raw, err := json.Marshal(c)
@@ -805,10 +807,32 @@ func (s *Server) handleConnectionDelete(w http.ResponseWriter, r *http.Request) 
 	if c == nil {
 		return
 	}
+	values, localOnly := r.URL.Query()["local_only"]
+	if localOnly && (len(values) != 1 || values[0] != "true") {
+		jsonCodedError(w, 400, "invalid_local_only", "Local-only deletion requires local_only=true")
+		return
+	}
 	unlock, err := s.store.LockVault(r.Context(), "connection-policy")
 	if err != nil {
 		jsonError(w, 500, "Policy lock unavailable")
 		return
+	}
+	if localOnly {
+		c, err = s.loadConnection(r.Context(), c.ID)
+		if err != nil {
+			unlock()
+			jsonError(w, 500, "Connection read failed")
+			return
+		}
+		if !matchConnectionRevision(w, r, c) {
+			unlock()
+			return
+		}
+		if !c.LocalOnlyRemovalAllowed {
+			unlock()
+			jsonCodedError(w, 409, "local_removal_unavailable", "Disable this OAuth connection and revoke all agent grants before removing it locally")
+			return
+		}
 	}
 	db, d := s.connectionSQL()
 	_, err = db.ExecContext(r.Context(), d.Rebind(`UPDATE connections SET status='disabled',revision=? WHERE id=?`), revision(), c.ID)
@@ -823,8 +847,16 @@ func (s *Server) handleConnectionDelete(w http.ResponseWriter, r *http.Request) 
 	// Disabling grants precedes network cleanup. A cleanup error retains the
 	// disabled state and encrypted account so an operator can retry explicitly.
 	if c.Kind != "static" && s.mcpOAuth != nil {
-		err = s.mcpOAuth.DisconnectConnection(r.Context(), c.library, c.ID)
+		if localOnly {
+			err = s.mcpOAuth.ForgetConnection(r.Context(), c.library, c.ID)
+		} else {
+			err = s.mcpOAuth.DisconnectConnection(r.Context(), c.library, c.ID)
+		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if localOnly {
+				jsonCodedError(w, 500, "local_cleanup_failed", "Connection remains disabled, but local cleanup failed; refresh before retrying")
+				return
+			}
 			jsonCodedError(w, 502, "upstream_cleanup_failed", "Connection disabled, but upstream cleanup failed; retry deletion")
 			return
 		}
@@ -852,7 +884,11 @@ func (s *Server) handleConnectionDelete(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, 500, "Connection delete failed")
 		return
 	}
-	if err = s.connectionAudit(r.Context(), r, a.ID, c.ID, "", c.Revision, "delete", "ok"); err != nil {
+	action := "delete"
+	if localOnly {
+		action = "delete_local"
+	}
+	if err = s.connectionAudit(r.Context(), r, a.ID, c.ID, "", c.Revision, action, "ok"); err != nil {
 		jsonError(w, 500, "Audit persistence failed")
 		return
 	}

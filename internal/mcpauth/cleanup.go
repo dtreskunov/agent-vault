@@ -111,6 +111,16 @@ func (m *Manager) cleanupRequest(request *http.Request, operation, key string) e
 // DisconnectConnection is the sole shared-connection upstream lifecycle
 // operation. A group detachment never reaches this method.
 func (m *Manager) DisconnectConnection(ctx context.Context, vault, key string) error {
+	return m.disconnectConnection(ctx, vault, key, false)
+}
+
+// ForgetConnection removes only local state after the owner accepts that
+// upstream tokens and client registrations may remain valid.
+func (m *Manager) ForgetConnection(ctx context.Context, vault, key string) error {
+	return m.disconnectConnection(ctx, vault, key, true)
+}
+
+func (m *Manager) disconnectConnection(ctx context.Context, vault, key string, localOnly bool) error {
 	appUnlock, err := m.LockApps(ctx)
 	if err != nil {
 		return err
@@ -123,18 +133,20 @@ func (m *Manager) DisconnectConnection(ctx context.Context, vault, key string) e
 	defer unlock()
 	account, err := m.repo.Account(ctx, vault, key)
 	if errors.Is(err, sql.ErrNoRows) {
-		return m.disconnectDraftConnection(ctx, vault, key)
+		return m.disconnectDraftConnection(ctx, vault, key, localOnly)
 	}
 	if err != nil {
 		return err
 	}
-	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err = m.revoke(cleanupCtx, account); err != nil {
-		return err
-	}
-	if err = m.deleteClient(cleanupCtx, account.Client); err != nil {
-		return err
+	if !localOnly {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err = m.revoke(cleanupCtx, account); err != nil {
+			return err
+		}
+		if err = m.deleteClient(cleanupCtx, account.Client); err != nil {
+			return err
+		}
 	}
 	tx, err := m.repo.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -151,7 +163,11 @@ func (m *Manager) DisconnectConnection(ctx context.Context, vault, key string) e
 	return tx.Commit()
 }
 
-func (m *Manager) disconnectDraftConnection(ctx context.Context, vault, key string) error {
+func (m *Manager) disconnectDraftConnection(ctx context.Context, vault, key string, localOnly bool) error {
+	if localOnly {
+		_, err := m.repo.db.ExecContext(ctx, m.repo.dialect.Rebind(`DELETE FROM gateway_oauth_records WHERE vault_id=? AND account_key=? AND kind IN ('client','state')`), vault, key)
+		return err
+	}
 	rows, err := m.repo.db.QueryContext(ctx, m.repo.dialect.Rebind(`SELECT ciphertext,nonce FROM gateway_oauth_records WHERE vault_id=? AND kind='client' AND account_key=?`), vault, key)
 	if err != nil {
 		return err

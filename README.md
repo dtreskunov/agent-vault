@@ -108,6 +108,14 @@ Connection deletion treats an OAuth revocation response of HTTP 400 with
 `invalid_token` as already revoked, including Google's response for expired or
 previously revoked tokens. Other remote cleanup failures retain the disabled
 connection for an explicit retry; they do not silently discard its encrypted state.
+After reviewing that failure, the owner may explicitly remove a disabled,
+unshared OAuth connection locally using `DELETE .../connections/{id}?local_only=true`
+with its latest exact `If-Match` revision. Metadata advertises
+`local_only_removal_allowed` only when this operation is available. Local removal
+purges that connection's encrypted tokens, pending consent and client state
+without contacting the provider. Provider authorization may remain valid, and
+revocation cannot be retried after the local material is discarded. Other
+connections are unaffected; normal deletion still requires upstream cleanup.
 Multiple OAuth connections may share a group's API destination. Select the
 intended account with its group-bound `Authorization: Bearer av-access:<handle>`
 placeholder; ambiguous requests without a selection fail closed. Discovery and

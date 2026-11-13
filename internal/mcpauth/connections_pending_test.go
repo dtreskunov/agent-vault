@@ -57,3 +57,25 @@ func TestManagedMCPNewestConsentAndDraftClientCleanup(t *testing.T) {
 		t.Fatal("draft lifecycle duplicated clients or revoked nonexistent tokens", registrations, deletions, revocations)
 	}
 }
+
+func TestManagedMCPLocalDraftRemovalDoesNotContactProvider(t *testing.T) {
+	m, db, _ := testManager(t)
+	authority := newAuthority(t, m)
+	ctx := context.Background()
+	user, library, _ := managedMCPFixture(t, m, db, "CONN_LOCAL")
+	start, err := m.StartConnection(ctx, library, user, "CONN_LOCAL", "mcp_oauth", authority.server.URL+"/mcp", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.ForgetConnection(ctx, library, "CONN_LOCAL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.ConnectionFlow(ctx, start.State); err != sql.ErrNoRows {
+		t.Fatal("removed draft retained pending consent", err)
+	}
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	if authority.deletions != 0 || authority.revocations != 0 {
+		t.Fatal("local draft removal contacted provider", authority.deletions, authority.revocations)
+	}
+}
