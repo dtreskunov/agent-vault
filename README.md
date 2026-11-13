@@ -116,6 +116,8 @@ purges that connection's encrypted tokens, pending consent and client state
 without contacting the provider. Provider authorization may remain valid, and
 revocation cannot be retried after the local material is discarded. Other
 connections are unaffected; normal deletion still requires upstream cleanup.
+Gateway builds require Go 1.26.11 or newer to include the net/http fix for
+GO-2026-6859; the release workflow scans the exact shipped configurations.
 Multiple OAuth connections may share a group's API destination. Select the
 intended account with its group-bound `Authorization: Bearer av-access:<handle>`
 placeholder; ambiguous requests without a selection fail closed. Discovery and
