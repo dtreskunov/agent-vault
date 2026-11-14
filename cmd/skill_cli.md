@@ -64,6 +64,11 @@ Detachment and group deletion never revoke upstream or delete source material.
 
 Both OAuth kinds start at `/connections/{connection}/oauth/start` with
 `{resource_url?,app_id?,scopes?}` and return `{state,authorize_url}`.
+MCP discovery validates the unauthenticated protocol response. An
+`invalid_mcp_response` error means an empty or non-MCP endpoint response: check
+the full, active MCP URL rather than a website or obsolete webhook.
+`oauth_not_required` means a valid MCP server responded without authentication;
+configure it without an OAuth connection. Neither error starts OAuth consent.
 The host completes at `POST /v1/oauth/complete {user_id,state,code,iss?}`.
 Completion returns `{connection_id,status,account?,code?,error?}` with no
 credential key or token. State pins the initiating native user/connection,

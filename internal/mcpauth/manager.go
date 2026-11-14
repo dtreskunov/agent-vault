@@ -46,7 +46,7 @@ func (m *Manager) StartNamed(ctx context.Context, vault, resource, clientName st
 		return nil, err
 	}
 	if !discovery.OAuth {
-		return nil, failure("oauth_not_required", "MCP resource did not request OAuth authentication")
+		return nil, failure("oauth_not_required", "This MCP server responded successfully without authentication. OAuth sign-in is not required; add it as an MCP server without an OAuth connection.")
 	}
 	appUnlock, err := m.LockApps(ctx)
 	if err != nil {

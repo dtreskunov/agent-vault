@@ -66,7 +66,11 @@ func newAuthority(t *testing.T, manager *Manager) *authority {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource/mcp"`)
 			w.WriteHeader(401)
 		case "/public":
-			fmt.Fprint(w, `{}`)
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			fmt.Fprint(w, publicInitialization)
 		case "/.well-known/oauth-protected-resource/mcp":
 			json.NewEncoder(w).Encode(oauthex.ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{base}, ScopesSupported: []string{"read"}})
 		case "/.well-known/oauth-authorization-server", "/.well-known/openid-configuration":

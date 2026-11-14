@@ -93,6 +93,12 @@ If DCR rejects the callback with `invalid_redirect_uri`, the error identifies th
 callback rejection without exposing provider response bodies. Ask the provider
 to allow `AGENT_VAULT_OAUTH_REDIRECT_URL` or configure an approved OAuth client;
 changing scopes cannot resolve a provider callback allowlist.
+MCP discovery validates an unauthenticated initialization response rather than
+treating HTTP 200 as proof of a public MCP server. `invalid_mcp_response`
+identifies empty or non-MCP responses and asks for the full, active endpoint;
+`oauth_not_required` means a valid MCP server responded without authentication.
+For Home Assistant, use its active MCP endpoint (normally `/api/mcp`), not a
+website address or an obsolete webhook.
 Managed scope inspection reads resource/issuer metadata without registering a
 client or changing OAuth state. Resource-advertised scopes take precedence over
 authorization-server options; missing metadata is not an implicit permission

@@ -28,6 +28,31 @@ including multiple accounts at the same resource in the same user's library.
 There is no automatic account merge or scope union. An explicit app resolves
 ambiguous issuer configurations. MCP services remain resource/path/port scoped.
 
+### Invalid endpoint or unnecessary OAuth
+
+Discovery sends an unauthenticated MCP `initialize` request and validates the
+JSON-RPC result over JSON or SSE. Legacy SSE discovery falls back to GET when
+POST is not supported, initializes the advertised endpoint, and checks its
+authentication challenge or matching response on the stream. An endpoint event
+or HTTP 200 alone does not establish that a URL is a public MCP server.
+
+- `invalid_mcp_response`: the URL returned an empty or non-MCP response. The error
+  includes the HTTP status, without exposing response bodies. Check the full,
+  active MCP endpoint, not the website address or an old webhook. Home Assistant
+  normally exposes its built-in MCP server at `https://<your-ha-host>/api/mcp`.
+- `oauth_not_required`: a valid MCP server responded without authentication.
+  Add that server without an OAuth connection; there is no OAuth sign-in to
+  complete. Scope discovery returns `oauth: false` for this case.
+
+Invalid endpoints also fail scope discovery instead of returning an empty,
+successful scope list. Neither case registers an OAuth client or creates consent
+state. Endpoint corrections require a new connection because resource identity
+is immutable; existing connections and grants are not automatically changed.
+Temporary stateful MCP sessions are terminated with a bounded, best-effort
+DELETE using the returned session ID and negotiated protocol version. Cleanup
+rejections are logged without changing the discovery result or exposing session
+IDs or response bodies.
+
 ### Callback rejected during registration
 
 A `registration_failed` response mentioning `invalid_redirect_uri` means the
