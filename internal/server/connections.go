@@ -93,6 +93,7 @@ func (s *Server) registerManaged(mux *http.ServeMux, wrap func(http.HandlerFunc)
 	mux.HandleFunc("GET /v1/managed-users/{user}/connections/{connection}", wrap(s.handleConnectionGet))
 	mux.HandleFunc("PUT /v1/managed-users/{user}/connections/{connection}", wrap(s.handleConnectionUpdate))
 	mux.HandleFunc("DELETE /v1/managed-users/{user}/connections/{connection}", wrap(s.handleConnectionDelete))
+	mux.HandleFunc("DELETE /v1/managed-users/{user}/connections/{connection}/draft", wrap(s.handleConnectionDraftDiscard))
 	mux.HandleFunc("POST /v1/managed-users/{user}/connections/{connection}/oauth/start", wrap(s.handleConnectionOAuthStart))
 	mux.HandleFunc("PUT /v1/managed-users/{user}/connections/{connection}/grants/{vault}", wrap(s.handleConnectionGrant))
 	mux.HandleFunc("DELETE /v1/managed-users/{user}/connections/{connection}/grants/{vault}", wrap(s.handleConnectionDetach))
@@ -803,6 +804,14 @@ func (s *Server) handleConnectionAccess(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, map[string]any{"grants": items})
 }
 func (s *Server) handleConnectionDelete(w http.ResponseWriter, r *http.Request) {
+	s.deleteConnection(w, r, false)
+}
+
+func (s *Server) handleConnectionDraftDiscard(w http.ResponseWriter, r *http.Request) {
+	s.deleteConnection(w, r, true)
+}
+
+func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request, draftOnly bool) {
 	a, c := s.ownedConnection(w, r)
 	if c == nil {
 		return
@@ -812,12 +821,16 @@ func (s *Server) handleConnectionDelete(w http.ResponseWriter, r *http.Request) 
 		jsonCodedError(w, 400, "invalid_local_only", "Local-only deletion requires local_only=true")
 		return
 	}
+	if draftOnly && localOnly {
+		jsonCodedError(w, 400, "invalid_draft_only", "Draft discard cannot use local-only deletion")
+		return
+	}
 	unlock, err := s.store.LockVault(r.Context(), "connection-policy")
 	if err != nil {
 		jsonError(w, 500, "Policy lock unavailable")
 		return
 	}
-	if localOnly {
+	if localOnly || draftOnly {
 		c, err = s.loadConnection(r.Context(), c.ID)
 		if err != nil {
 			unlock()
@@ -828,14 +841,34 @@ func (s *Server) handleConnectionDelete(w http.ResponseWriter, r *http.Request) 
 			unlock()
 			return
 		}
-		if !c.LocalOnlyRemovalAllowed {
+		if localOnly && !c.LocalOnlyRemovalAllowed {
 			unlock()
 			jsonCodedError(w, 409, "local_removal_unavailable", "Disable this OAuth connection and revoke all agent grants before removing it locally")
 			return
 		}
+		if draftOnly && (c.Kind != "mcp_oauth" || c.Status != "draft" || len(c.Grants) != 0 || len(c.Credentials) != 0) {
+			unlock()
+			jsonCodedError(w, 409, "draft_changed", "Only an unused MCP draft can be discarded during setup")
+			return
+		}
 	}
 	db, d := s.connectionSQL()
-	_, err = db.ExecContext(r.Context(), d.Rebind(`UPDATE connections SET status='disabled',revision=? WHERE id=?`), revision(), c.ID)
+	disable := `UPDATE connections SET status='disabled',revision=? WHERE id=?`
+	args := []any{revision(), c.ID}
+	if draftOnly {
+		disable += ` AND revision=? AND deleted=0 AND status='draft' AND NOT EXISTS(SELECT 1 FROM gateway_oauth_records WHERE vault_id=connections.library_vault_id AND kind='account' AND record_key=connections.id)`
+		args = append(args, c.sourceRevision)
+	}
+	result, err := db.ExecContext(r.Context(), d.Rebind(disable), args...)
+	if err == nil && draftOnly {
+		var changed int64
+		changed, err = result.RowsAffected()
+		if err == nil && changed != 1 {
+			unlock()
+			jsonCodedError(w, 412, "draft_changed", "The draft changed; reload before discarding it")
+			return
+		}
+	}
 	if err == nil {
 		_, err = db.ExecContext(r.Context(), d.Rebind(`UPDATE connection_grants SET status='revoked' WHERE connection_id=?`), c.ID)
 	}

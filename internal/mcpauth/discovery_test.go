@@ -2,11 +2,14 @@ package mcpauth
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +47,10 @@ func TestDiscoveryValidatesPublicMCP(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			m, _, library := testManager(t)
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
 				if r.Method != http.MethodPost || r.Header.Get("Authorization") != "" {
 					t.Error("initialization must be an unauthenticated POST")
 				}
@@ -75,8 +82,8 @@ func TestDiscoveryValidatesPublicMCP(t *testing.T) {
 				_, err = m.Start(context.Background(), library, server.URL+"/mcp")
 				var failure *Failure
 				if !errors.As(err, &failure) || failure.Code != "oauth_not_required" ||
-					!strings.Contains(failure.Error(), "without authentication") {
-					t.Fatal("public MCP sign-in did not explain that OAuth is unnecessary", err)
+					!strings.Contains(failure.Error(), "Individual tools may still require an account") {
+					t.Fatal("public MCP sign-in did not explain the discovery limitation", err)
 				}
 			} else {
 				var failure *Failure
@@ -101,6 +108,10 @@ func TestDiscoveryClosesPublicSSEAfterInitialization(t *testing.T) {
 	m, _, library := testManager(t)
 	closed := make(chan struct{})
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: "+publicInitialization+"\n\n")
 		w.(http.Flusher).Flush()
@@ -160,6 +171,10 @@ func TestDiscoveryLegacySSEFallback(t *testing.T) {
 					w.WriteHeader(http.StatusAccepted)
 					initialized <- struct{}{}
 				case "/.well-known/oauth-protected-resource/sse":
+					if mode != "protected" {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{
 						"resource": server.URL + "/sse", "authorization_servers": []string{server.URL},
@@ -171,7 +186,6 @@ func TestDiscoveryLegacySSEFallback(t *testing.T) {
 						"token_endpoint": server.URL + "/token", "code_challenge_methods_supported": []string{"S256"},
 					})
 				default:
-					t.Error("unexpected discovery endpoint", r.URL.Path)
 					w.WriteHeader(http.StatusNotFound)
 				}
 			}))
@@ -207,6 +221,10 @@ func TestDiscoveryTerminatesTemporarySessions(t *testing.T) {
 			m, _, library := testManager(t)
 			deleted := make(chan struct{}, 1)
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
 				if r.Method == http.MethodDelete {
 					version := "2024-11-05"
 					if !test.valid {
@@ -242,6 +260,10 @@ func TestDiscoveryTerminatesTemporarySessions(t *testing.T) {
 func TestDiscoverySessionCleanupIsBounded(t *testing.T) {
 	m, _, library := testManager(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if r.Method == http.MethodDelete {
 			<-r.Context().Done()
 			return
@@ -256,5 +278,82 @@ func TestDiscoverySessionCleanupIsBounded(t *testing.T) {
 	probe, err := m.Probe(context.Background(), library, server.URL+"/mcp")
 	if err != nil || probe.OAuth || time.Since(started) > 3*time.Second {
 		t.Fatal("cleanup failure blocked or changed public discovery", probe, err)
+	}
+}
+
+func TestPublicInitializationStillDiscoversOAuth(t *testing.T) {
+	for _, mode := range []string{"path", "origin", "invalid-issuer"} {
+		t.Run(mode, func(t *testing.T) {
+			m, _, library := testManager(t)
+			var server *httptest.Server
+			server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "" {
+					t.Error("discovery sent credentials")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/mcp":
+					var request struct{ Method string }
+					if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&request) != nil || request.Method != "initialize" {
+						t.Error("discovery must not call tools")
+					}
+					fmt.Fprint(w, publicInitialization)
+				case "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource":
+					resource := server.URL + "/mcp"
+					if mode == "origin" {
+						if r.URL.Path != "/.well-known/oauth-protected-resource" {
+							w.WriteHeader(http.StatusNotFound)
+							return
+						}
+						resource = server.URL
+					}
+					json.NewEncoder(w).Encode(map[string]any{
+						"resource": resource, "authorization_servers": []string{server.URL},
+						"scopes_supported": []string{"profile:read"},
+					})
+				case "/.well-known/oauth-authorization-server":
+					issuer := server.URL
+					if mode == "invalid-issuer" {
+						issuer = "https://different.example"
+					}
+					json.NewEncoder(w).Encode(map[string]any{
+						"issuer": issuer, "authorization_endpoint": server.URL + "/authorize",
+						"token_endpoint": server.URL + "/token", "code_challenge_methods_supported": []string{"S256"},
+					})
+				default:
+					t.Error("unexpected discovery endpoint", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			roots := x509.NewCertPool()
+			roots.AddCert(server.Certificate())
+			m.client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: roots, ServerName: "127.0.0.1"}
+			server.URL = strings.Replace(server.URL, "127.0.0.1", "localhost.localdomain", 1)
+			if err := m.StoreApp(context.Background(), library, Client{
+				AppID: "private-app", Issuer: server.URL, ID: "registered-client", Secret: "synthetic-secret",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			options, err := m.DiscoverScopes(context.Background(), library, server.URL+"/mcp", "private-app", "")
+			if mode == "invalid-issuer" {
+				if err == nil {
+					t.Fatal("public initialization bypassed issuer validation")
+				}
+				return
+			}
+			if err != nil || !options.OAuth || options.Issuer != server.URL ||
+				options.Source != "resource" || !reflect.DeepEqual(options.Scopes, []string{"profile:read"}) {
+				t.Fatal("public initialization hid OAuth metadata", options, err)
+			}
+			var states int
+			if err := m.repo.db.QueryRow(`SELECT COUNT(*) FROM gateway_oauth_records WHERE kind='state'`).Scan(&states); err != nil || states != 0 {
+				t.Fatal("discovery created consent state", states, err)
+			}
+			started, err := m.StartNamed(context.Background(), library, server.URL+"/mcp", "", "private-app")
+			if err != nil || !strings.Contains(started.AuthorizeURL, "client_id=registered-client") {
+				t.Fatal("configured app could not start consent after public initialization", started, err)
+			}
+		})
 	}
 }

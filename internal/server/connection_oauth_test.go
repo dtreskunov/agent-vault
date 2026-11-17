@@ -85,6 +85,37 @@ func TestManagedOAuthClientNameValidation(t *testing.T) {
 	}
 }
 
+func TestManagedMCPDraftDiscard(t *testing.T) {
+	f := newManagedFixture(t)
+	c := f.create(`{"label":"MCP draft","kind":"mcp_oauth","resource_url":"https://mcp.example.com/mcp"}`)
+	path := f.base() + "/connections/" + c.ID + "/draft"
+	if w := f.call("DELETE", path, "", ""); w.Code != 428 {
+		t.Fatal("draft discard did not require a revision", w.Code, w.Body)
+	}
+	if w := f.call("DELETE", path, "", `"stale"`); w.Code != 412 {
+		t.Fatal("draft discard ignored a stale revision", w.Code, w.Body)
+	}
+	if w := f.call("DELETE", path, "", c.Revision); w.Code != http.StatusNoContent {
+		t.Fatal("unused draft could not be discarded", w.Code, w.Body)
+	}
+	if w := f.call("GET", f.base()+"/connections/"+c.ID, "", ""); w.Code != 404 {
+		t.Fatal("discarded draft remained usable", w.Code, w.Body)
+	}
+	c = f.create(`{"label":"Authorized MCP","kind":"mcp_oauth","resource_url":"https://mcp.example.com/mcp"}`)
+	db, d := f.db.GatewaySQL()
+	if _, err := db.Exec(d.Rebind(`UPDATE connections SET status='ready',keys_json=? WHERE id=?`), `["authorized-key"]`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	authorized, err := f.s.loadConnection(context.Background(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := f.call("DELETE", f.base()+"/connections/"+c.ID+"/draft", "", authorized.Revision)
+	if w.Code != 409 {
+		t.Fatal("setup discarded an authorized connection", w.Code, w.Body)
+	}
+}
+
 func TestManagedScopeInspectionKeepsStatePrivateAndUnchanged(t *testing.T) {
 	f, _, c, _ := setupManagedOAuth(t)
 	ctx := context.Background()

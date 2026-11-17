@@ -27,22 +27,35 @@ metadata documents and PKCE are reused. Registrations are connection-scoped,
 including multiple accounts at the same resource in the same user's library.
 There is no automatic account merge or scope union. An explicit app resolves
 ambiguous issuer configurations. MCP services remain resource/path/port scoped.
+Resource and app identity remain immutable, including on drafts. If setup
+selects another app after a failed start, it can discard its own unused MCP
+draft with `DELETE /.../connections/{id}/draft` and exact `If-Match`,
+then create a draft for the selected app. This operation rejects credentials,
+grants, accounts and concurrent changes; it uses normal pending-client cleanup.
+Older gateways return an error for this distinct route; clients must not fall
+back to ordinary connection deletion.
 
-### Invalid endpoint or unnecessary OAuth
+### Endpoint and OAuth discovery
 
 Discovery sends an unauthenticated MCP `initialize` request and validates the
 JSON-RPC result over JSON or SSE. Legacy SSE discovery falls back to GET when
 POST is not supported, initializes the advertised endpoint, and checks its
 authentication challenge or matching response on the stream. An endpoint event
-or HTTP 200 alone does not establish that a URL is a public MCP server.
+or HTTP 200 alone does not establish that a URL is a valid MCP server.
+After a valid anonymous initialization, discovery still checks protected-resource
+metadata: servers may expose discovery publicly while requiring OAuth for tools.
+Validated resource metadata follows the same issuer, endpoint and PKCE checks as
+an authentication challenge. No tool calls are made.
 
 - `invalid_mcp_response`: the URL returned an empty or non-MCP response. The error
   includes the HTTP status, without exposing response bodies. Check the full,
   active MCP endpoint, not the website address or an old webhook. Home Assistant
   normally exposes its built-in MCP server at `https://<your-ha-host>/api/mcp`.
-- `oauth_not_required`: a valid MCP server responded without authentication.
-  Add that server without an OAuth connection; there is no OAuth sign-in to
-  complete. Scope discovery returns `oauth: false` for this case.
+- `oauth_not_required`: a valid MCP server responded without authentication and
+  OAuth metadata was not detected. Scope discovery returns `oauth: false`.
+  This does not prove that individual tools allow anonymous access. If account
+  access is needed, configure a sign-in app rather than removing an existing
+  account binding based only on discovery.
 
 Invalid endpoints also fail scope discovery instead of returning an empty,
 successful scope list. Neither case registers an OAuth client or creates consent

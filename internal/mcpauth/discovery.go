@@ -94,19 +94,24 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 		}
 	}
 	defer response.Body.Close()
+	public := false
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		challenge, err := m.validateMCPResponse(ctx, response, legacy)
 		if err != nil {
 			return nil, err
 		}
 		if challenge == nil {
-			return &Discovery{URL: raw}, nil
+			public = true
+		} else {
+			response.Body.Close()
+			response = challenge
+			defer response.Body.Close()
 		}
-		response.Body.Close()
-		response = challenge
-		defer response.Body.Close()
 	}
-	io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if !public {
+		io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	}
+	response.Body.Close()
 	var metadataURLs []string
 	challenges, err := oauthex.ParseWWWAuthenticate(response.Header.Values("WWW-Authenticate"))
 	if err != nil {
@@ -147,6 +152,9 @@ func (m *Manager) discover(ctx context.Context, raw string) (*Discovery, error) 
 		protected = nil
 	}
 	if protected == nil || len(protected.AuthorizationServers) == 0 {
+		if public {
+			return &Discovery{URL: raw}, nil
+		}
 		return nil, failure("discovery_failed", "MCP protected-resource metadata is unavailable or invalid")
 	}
 	issuer := protected.AuthorizationServers[0]
