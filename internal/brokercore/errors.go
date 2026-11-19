@@ -43,6 +43,12 @@ var (
 	// configured". Callers surface 403 with error code "service_disabled".
 	ErrServiceDisabled = errors.New("brokercore: broker service is disabled")
 
+	ErrBindingDestinationMismatch = errors.New("brokercore: binding does not authorize this destination")
+	ErrBindingSelectionRequired   = errors.New("brokercore: explicit binding selection required")
+	ErrBindingInactive            = errors.New("brokercore: binding is inactive")
+	ErrBindingInvalid             = errors.New("brokercore: binding selector is invalid")
+	ErrBindingConflict            = errors.New("brokercore: conflicting credential bindings")
+
 	// ErrOAuthNotConnected means the credential is an OAuth type but
 	// the consent flow hasn't completed yet (no access token stored).
 	ErrOAuthNotConnected = errors.New("brokercore: oauth credential not yet connected")

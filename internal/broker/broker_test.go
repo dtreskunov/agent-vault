@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func TestPathPatternsOverlapUsesRuntimeSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"/", "/api/mcp", false},
+		{"/api/state", "/api/states", false},
+		{"/api/states", "/api/states/*", false},
+		{"/api/states/light", "/api/states/*", true},
+		{"/api/mcp", "/api/mcp", true},
+		{"", "/api/mcp", true},
+		{"/api/*", "/api/mcp", true},
+		{"/api/*/states", "/api/mcp/*", true},
+		{"/one/*", "/two/*", false},
+	} {
+		if got := PathPatternsOverlap(tc.a, tc.b); got != tc.want {
+			t.Errorf("PathPatternsOverlap(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+		if got := PathPatternsOverlap(tc.b, tc.a); got != tc.want {
+			t.Errorf("reversed PathPatternsOverlap(%q, %q) = %v, want %v", tc.b, tc.a, got, tc.want)
+		}
+	}
+	root := []Service{{Name: "root", Host: "api.example.com", Path: "/"}}
+	if matched, _ := MatchService("api.example.com", 443, "/api/states", root); matched != nil {
+		t.Fatal("exact root authorized a REST endpoint")
+	}
+}
+
 func TestMatchServiceExact(t *testing.T) {
 	services := []Service{
 		{Name: "stripe", Host: "api.stripe.com", Auth: Auth{Type: "bearer", Token: "STRIPE_KEY"}},

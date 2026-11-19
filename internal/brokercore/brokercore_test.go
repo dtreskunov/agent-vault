@@ -2,10 +2,48 @@ package brokercore
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestInjectErrorClassificationMatchesResponse(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{ErrBindingDestinationMismatch, 403, "binding_destination_mismatch"},
+		{ErrBindingSelectionRequired, 403, "binding_selection_required"},
+		{ErrBindingInactive, 403, "binding_inactive"},
+		{ErrBindingInvalid, 403, "binding_invalid"},
+		{ErrBindingConflict, 403, "binding_conflict"},
+		{ErrServiceDisabled, 403, "service_disabled"},
+		{ErrServiceNotFound, 403, "forbidden"},
+		{ErrOAuthNotConnected, 502, "oauth_not_connected"},
+		{ErrOAuthRefreshFailed, 502, "oauth_refresh_failed"},
+		{ErrCredentialMissing, 502, "credential_not_found"},
+		{fmt.Errorf("private backend failure"), 500, "internal"},
+	} {
+		err := fmt.Errorf("private context: %w", tc.err)
+		status, code := ClassifyInjectError(err)
+		w := httptest.NewRecorder()
+		WriteInjectError(w, err, "api.example.com:443", "group", "")
+		var body struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(w.Body.Bytes(), &body) != nil || status != tc.status || code != tc.code ||
+			w.Code != status || body.Error != code || w.Header().Get(ProxyErrorHeader) != "true" {
+			t.Errorf("classification disagrees with response for %v: %d %s %s", tc.err, status, code, w.Body)
+		}
+		if strings.Contains(w.Body.String(), "private") {
+			t.Fatal("response leaked internal error context", w.Body)
+		}
+	}
+}
 
 func TestIsHopByHop(t *testing.T) {
 	cases := map[string]bool{

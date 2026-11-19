@@ -93,6 +93,9 @@ func TestManagedConnectionRuleNamesAreConnectionScoped(t *testing.T) {
 	}{
 		{"different hosts", "integrate.api.nvidia.com/*", "api.groq.com/openai/v1", "route-1", "api.groq.com", "/openai/v1", 200},
 		{"disjoint paths", "api.example.com/one/*", "api.example.com/two/*", "route-1", "api.example.com", "/two/items", 200},
+		{"exact root and MCP", "api.example.com/", "api.example.com/api/mcp", "route-1", "api.example.com", "/api/mcp", 200},
+		{"exact path prefixes", "api.example.com/api/state", "api.example.com/api/states", "route-1", "api.example.com", "/api/states", 200},
+		{"exact path and descendants", "api.example.com/api/states", "api.example.com/api/states/*", "route-1", "api.example.com", "/api/states/light", 200},
 		{"overlapping destinations", "api.example.com/*", "api.example.com/v1/*", "different-rule", "", "", 409},
 		{"overlapping wildcard hosts", "*.example.com/*", "api.example.com/*", "different-rule", "", "", 409},
 	} {
@@ -157,6 +160,43 @@ func TestManagedConnectionRuleNamesAreConnectionScoped(t *testing.T) {
 				t.Fatal("rejected update changed existing authorization", err)
 			}
 		})
+	}
+}
+
+func TestBindingConflictMetadataIsOwnerScoped(t *testing.T) {
+	f := newManagedFixture(t)
+	first := f.create(basicConnection)
+	if w := f.call("PUT", f.base()+"/connections/"+first.ID+"/grants/group-one", `{}`, ""); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	second := f.create(basicConnection)
+	w := f.call("PUT", f.base()+"/connections/"+second.ID+"/grants/group-one", `{}`, "")
+	var body struct {
+		Code     string            `json:"code"`
+		Conflict map[string]string `json:"conflict"`
+	}
+	if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &body) != nil ||
+		body.Conflict["connection_id"] != first.ID || body.Conflict["connection_label"] != first.Label ||
+		body.Conflict["existing_destination"] != "api.example.com/v1/*" {
+		t.Fatal("missing actionable owner conflict", w.Code, w.Body)
+	}
+	w = f.call("PUT", "/v1/managed-users", `{"installation_id":"install","subject":"other","active":true,"role":"no-access","vault_grants":[{"vault":"group-one","role":"admin"}]}`, "")
+	var other store.ManagedUserResult
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &other) != nil {
+		t.Fatal(w.Code, w.Body)
+	}
+	base := "/v1/managed-users/" + other.ID
+	w = f.call("POST", base+"/connections", basicConnection, "")
+	var third connection
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &third) != nil {
+		t.Fatal(w.Code, w.Body)
+	}
+	w = f.call("PUT", base+"/connections/"+third.ID+"/grants/group-one", `{}`, "")
+	body.Conflict = nil
+	if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &body) != nil || body.Code != "binding_conflict" ||
+		len(body.Conflict) != 1 || body.Conflict["destination"] != "api.example.com/v1/*" ||
+		strings.Contains(w.Body.String(), first.ID) || strings.Contains(w.Body.String(), first.Label) {
+		t.Fatal("another owner's metadata was exposed", w.Code, w.Body)
 	}
 }
 

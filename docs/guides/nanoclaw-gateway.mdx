@@ -118,6 +118,24 @@ require an exact `If-Match` revision for explicit update/reapproval. Destination
 admins may detach via DELETE `/.../vaults/{vault}/access/{connection}` and list
 safe references with GET `/.../vaults/{vault}/access`.
 
+Destination paths without `*` match exactly: `/` permits only the root endpoint,
+`/api/states` permits that endpoint, and `/api/states/*` permits its descendants.
+An omitted path or `/*` covers every path. Static/static and static/OAuth
+overlaps remain rejected; `/api/*` therefore conflicts with an MCP binding at
+`/api/mcp`. Two wildcard patterns are checked conservatively.
+Grant and destination-update conflicts return HTTP `409`, code
+`binding_conflict`, and `conflict.destination`. If the effective user owns the
+conflicting connection, `conflict` also includes `existing_destination`,
+`connection_id` and `connection_label`; other owners' metadata is redacted.
+Existing access is unchanged by a rejected grant or destination update.
+
+Proxy authorization errors distinguish `binding_destination_mismatch`,
+`binding_selection_required`, `binding_inactive`, `binding_invalid` and
+`binding_conflict` from an explicitly toggled-off `service_disabled`.
+The HTTP response and request log use the same status and error code.
+MCP binding headers authorize only that binding's destinations. Never reuse
+them for unrelated REST calls or silently switch credentials after a denial.
+
 Removing access or deleting a group never deletes the source, revokes OAuth or
 removes a DCR client. Owner connection deletion is global, disables all grants
 first and reports configured upstream cleanup failures explicitly. Grants follow

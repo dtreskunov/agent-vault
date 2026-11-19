@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,66 @@ import (
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
 )
+
+func TestMITMBindingDenialMatchesRequestLog(t *testing.T) {
+	for _, tc := range []struct {
+		local bool
+		err   error
+	}{
+		{false, brokercore.ErrBindingDestinationMismatch},
+		{false, brokercore.ErrBindingInactive},
+		{false, brokercore.ErrServiceDisabled},
+		{false, brokercore.ErrOAuthRefreshFailed},
+		{true, brokercore.ErrBindingDestinationMismatch},
+		{true, brokercore.ErrBindingInactive},
+	} {
+		t.Run(fmt.Sprintf("local=%t/%v", tc.local, tc.err), func(t *testing.T) {
+			var upstreamCalls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				upstreamCalls.Add(1)
+			}))
+			defer upstream.Close()
+			target, _ := url.Parse(upstream.URL)
+			cp := &fakeCredProvider{}
+			if !tc.local {
+				cp.byHost = map[string]fakeInjectResult{target.Hostname(): {err: tc.err}}
+			}
+			sink := &recordingSink{}
+			proxyURL, roots, _ := setupProxy(t,
+				validTokenResolver("token", &brokercore.ProxyScope{VaultID: "group", VaultName: "group"}),
+				cp, func(o *Options) {
+					o.LogSink = sink
+					if tc.local {
+						o.LocalResponse = func(context.Context, string, *http.Request) (*http.Response, error) {
+							return nil, tc.err
+						}
+					}
+				})
+			request, _ := http.NewRequest(http.MethodGet, upstream.URL, nil)
+			if tc.local {
+				request.Header.Set("Authorization", "Bearer av-access:group-bound-selector")
+			}
+			response, err := newTrustingClient(proxyURL, url.User("token"), roots).Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var body struct {
+				Error string `json:"error"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			status, code := brokercore.ClassifyInjectError(tc.err)
+			rows := sink.waitForRows(t, 1)
+			if len(rows) != 1 || response.StatusCode != status || body.Error != code ||
+				rows[0].Status != status || rows[0].ErrorCode != code ||
+				response.Header.Get(brokercore.ProxyErrorHeader) != "true" || upstreamCalls.Load() != 0 {
+				t.Fatal("binding denial bypassed classification or reached upstream", response.StatusCode, body, rows)
+			}
+		})
+	}
+}
 
 // recordingSink captures records from the forward path so tests can
 // assert the audit log shape end-to-end.

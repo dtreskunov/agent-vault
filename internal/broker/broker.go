@@ -715,6 +715,25 @@ func matchPathGlob(pattern, path string) (literalLen int, ok bool) {
 	return literalLen, true
 }
 
+// PathPatternsOverlap uses runtime matching for exact paths and conservatively
+// rejects potentially intersecting wildcard patterns.
+func PathPatternsOverlap(a, b string) bool {
+	if a == "" || b == "" {
+		return true
+	}
+	if !strings.Contains(a, "*") {
+		_, matches := matchPathGlob(b, a)
+		return matches
+	}
+	if !strings.Contains(b, "*") {
+		_, matches := matchPathGlob(a, b)
+		return matches
+	}
+	ap := strings.SplitN(a, "*", 2)[0]
+	bp := strings.SplitN(b, "*", 2)[0]
+	return strings.HasPrefix(ap, bp) || strings.HasPrefix(bp, ap)
+}
+
 // Slugify derives a ValidateSlug-conformant identifier from host+path+port.
 // Distinct inputs can collide (e.g. `*.github.com` and `github.com` both
 // yield `github-com`); callers dedupe via DisambiguateSlug.

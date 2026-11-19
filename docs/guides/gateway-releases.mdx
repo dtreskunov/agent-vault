@@ -5,6 +5,14 @@ description: "Pinned, reproducible gateway binaries with checksums and provenanc
 
 ## Current coordinated release
 
+`gw-v0.6.1` aligns exact-path credential conflict checks with runtime matching
+and distinguishes binding authorization failures from disabled services.
+Conflict details identify only the effective user's own connections; proxy
+responses and request logs share an error classification, including OAuth
+access-placeholder interception. Deploy with the matching NanoClaw credential
+diagnostics UI. Credentials, grants and database schemas are unchanged; no
+consent, token rotation or destination broadening is required.
+
 `gw-v0.6.0` discovers OAuth protected-resource metadata even when MCP
 initialization is public, so servers such as Stripe Link can use registered
 sign-in apps. It also adds revision-checked discard of unused MCP setup drafts
@@ -44,7 +52,7 @@ state and verify the published tag's signed provenance before installation.
 From a checkout **or an export of the same commit**, run:
 
 ```bash
-GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.6.0 "$PWD/agent-vault"
+GOOS=linux GOARCH=amd64 sh scripts/build-gateway.sh gw-v0.6.1 "$PWD/agent-vault"
 ```
 
 This is the canonical gateway build command. The script selects the exact Go
@@ -95,7 +103,7 @@ publishes a release**. Download the workflow artifact for inspection:
 
 ```bash
 gh workflow run gateway-release.yml --repo dtreskunov/agent-vault \
-  --ref bananaclaw -f version=gw-v0.6.0
+  --ref bananaclaw -f version=gw-v0.6.1
 gh run list --repo dtreskunov/agent-vault --workflow gateway-release.yml
 gh run download <run-id> --repo dtreskunov/agent-vault \
   --name gateway-release --dir gateway-dry-run
@@ -114,7 +122,7 @@ workflow dispatch.
 Pin the version and platform; do not install an unpinned `latest` binary:
 
 ```bash
-version=gw-v0.6.0
+version=gw-v0.6.1
 asset="agent-vault_${version}_linux_amd64"
 gh release download "$version" --repo dtreskunov/agent-vault \
   --pattern "$asset" --pattern SHA256SUMS --pattern build-provenance.jsonl

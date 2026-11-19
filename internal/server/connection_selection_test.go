@@ -133,27 +133,45 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 		if pinErr != nil || pinned.Headers["Authorization"] != result.Headers["Authorization"] {
 			t.Fatal("explicit MCP connection selected the wrong identity", pinErr)
 		}
-		if _, pinErr = provider.Inject(brokercore.WithRequestBinding(selected, []string{"BIND_OTHER"}), one.ID, "api.example.com", 443, "/items"); !errors.Is(pinErr, brokercore.ErrServiceDisabled) {
+		if _, pinErr = provider.Inject(brokercore.WithRequestBinding(selected, []string{"BIND_OTHER"}), one.ID, "api.example.com", 443, "/items"); !errors.Is(pinErr, brokercore.ErrBindingInvalid) {
 			t.Fatal("conflicting selectors were accepted", pinErr)
 		}
-		if _, err = provider.Inject(selected, two.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+		if _, err = provider.Inject(selected, two.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrBindingDestinationMismatch) {
 			t.Fatal("binding selector crossed groups", err)
 		}
-		if _, err = provider.Inject(selected, one.ID, "elsewhere.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+		if _, err = provider.Inject(selected, one.ID, "elsewhere.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrBindingDestinationMismatch) {
 			t.Fatal("binding selector crossed destinations", err)
 		}
-		if _, err = provider.Inject(selected, one.ID, "api.example.com", 8443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+		if _, err = provider.Inject(selected, one.ID, "api.example.com", 8443, "/items"); !errors.Is(err, brokercore.ErrBindingDestinationMismatch) {
 			t.Fatal("binding selector crossed ports", err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "https://api.example.com/items", nil)
+		request.Header.Set("Authorization", "Bearer "+mcpauth.AccessPlaceholderPrefix+b.handle)
+		if response, err := f.s.LocalTokenResponse(ctx, one.ID, request); err != nil || response != nil {
+			t.Fatal("authorized API request was intercepted as a token request", err)
+		}
+		for _, destination := range []string{"https://elsewhere.example.com/items", "https://api.example.com:8443/items", "http://api.example.com/items"} {
+			request := httptest.NewRequest(http.MethodGet, destination, nil)
+			request.Header.Set("Authorization", "Bearer "+mcpauth.AccessPlaceholderPrefix+b.handle)
+			if _, err := f.s.LocalTokenResponse(ctx, one.ID, request); !errors.Is(err, brokercore.ErrBindingDestinationMismatch) {
+				t.Fatal("local OAuth interception lost destination mismatch", destination, err)
+			}
 		}
 	}
 
-	for _, authorization := range [][]string{
-		nil, {"Bearer placeholder"}, {"Bearer " + mcpauth.AccessPlaceholderPrefix + "unknown"},
-		{"Bearer " + mcpauth.AccessPlaceholderPrefix}, {"Basic " + mcpauth.AccessPlaceholderPrefix + bindings[0].handle},
-		{"Bearer " + mcpauth.AccessPlaceholderPrefix + bindings[0].handle, "Bearer ignored"},
+	for _, tc := range []struct {
+		authorization []string
+		want          error
+	}{
+		{nil, brokercore.ErrBindingSelectionRequired},
+		{[]string{"Bearer placeholder"}, brokercore.ErrBindingSelectionRequired},
+		{[]string{"Bearer " + mcpauth.AccessPlaceholderPrefix + "unknown"}, brokercore.ErrBindingDestinationMismatch},
+		{[]string{"Bearer " + mcpauth.AccessPlaceholderPrefix}, brokercore.ErrBindingInvalid},
+		{[]string{"Basic " + mcpauth.AccessPlaceholderPrefix + bindings[0].handle}, brokercore.ErrBindingInvalid},
+		{[]string{"Bearer " + mcpauth.AccessPlaceholderPrefix + bindings[0].handle, "Bearer ignored"}, brokercore.ErrBindingInvalid},
 	} {
-		if _, err := provider.Inject(brokercore.WithRequestAuthorization(ctx, authorization), one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
-			t.Fatal("missing or invalid selection did not fail closed", authorization, err)
+		if _, err := provider.Inject(brokercore.WithRequestAuthorization(ctx, tc.authorization), one.ID, "api.example.com", 443, "/items"); !errors.Is(err, tc.want) {
+			t.Fatal("missing or invalid selection did not fail closed", tc.authorization, err)
 		}
 	}
 	static := f.create(basicConnection)
@@ -176,14 +194,19 @@ func TestManagedOAuthExplicitIdentitySelection(t *testing.T) {
 	if w = f.call("DELETE", firstBase+"/connections/"+firstBinding.id+"/grants/group-one", "", ""); w.Code != http.StatusNoContent {
 		t.Fatal(w.Code, w.Body)
 	}
-	if _, err = provider.Inject(selected, one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+	if _, err = provider.Inject(selected, one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrBindingInactive) {
 		t.Fatal("revoked selection fell through to the other identity", err)
 	}
-	if _, err = provider.Inject(brokercore.WithRequestBinding(ctx, []string{firstBinding.handle}), one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+	if _, err = provider.Inject(brokercore.WithRequestBinding(ctx, []string{firstBinding.handle}), one.ID, "api.example.com", 443, "/items"); !errors.Is(err, brokercore.ErrBindingInactive) {
 		t.Fatal("revoked named MCP reference fell through to another account", err)
 	}
-	if err = injected.Authorize(ctx); !errors.Is(err, brokercore.ErrServiceDisabled) {
+	if err = injected.Authorize(ctx); !errors.Is(err, brokercore.ErrBindingInactive) {
 		t.Fatal("in-flight selection retained revoked authority", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://api.example.com/items", nil)
+	request.Header.Set("Authorization", "Bearer "+mcpauth.AccessPlaceholderPrefix+firstBinding.handle)
+	if _, err := f.s.LocalTokenResponse(ctx, one.ID, request); !errors.Is(err, brokercore.ErrBindingInactive) {
+		t.Fatal("local OAuth interception lost inactive binding", err)
 	}
 }
 

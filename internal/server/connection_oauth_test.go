@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/gatewaytest"
 	"github.com/Infisical/agent-vault/internal/mcpauth"
@@ -294,7 +295,7 @@ func TestManagedConnectionOAuthAppLifecycleAndRevocationDuringRefresh(t *testing
 	}
 	access := httptest.NewRequest("GET", "https://api.example.com/anything", nil)
 	access.Header.Set("Authorization", "Bearer av-access:"+bindings[0].handle)
-	if response, err := f.s.LocalTokenResponse(ctx, two.ID, access); err != nil || response == nil || response.StatusCode != 403 {
+	if response, err := f.s.LocalTokenResponse(ctx, two.ID, access); !errors.Is(err, brokercore.ErrBindingDestinationMismatch) || response != nil {
 		t.Fatal("copied access handle crossed group boundary", err)
 	}
 	access.Header.Set("Authorization", "Bearer av-access:"+bindings[0].handle)

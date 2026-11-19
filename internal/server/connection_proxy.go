@@ -1,13 +1,11 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"slices"
@@ -70,28 +68,56 @@ func serviceOverlap(a, b broker.Service) bool {
 	if a.Port != nil && b.Port != nil && *a.Port != *b.Port {
 		return false
 	}
-	// Conservative prefix intersection rejects ambiguous glob expressions too.
-	prefix := func(path string) string {
-		if i := strings.IndexAny(path, "*?["); i >= 0 {
-			return path[:i]
-		}
-		return path
-	}
-	ap, bp := prefix(a.Path), prefix(b.Path)
-	return strings.HasPrefix(ap, bp) || strings.HasPrefix(bp, ap)
+	return broker.PathPatternsOverlap(a.Path, b.Path)
 }
+
+type bindingDestinationConflict struct {
+	candidate, existing        broker.Service
+	connectionID, label, owner string
+}
+
+func (e *bindingDestinationConflict) Error() string {
+	return "a local or shared binding already occupies this service destination"
+}
+
+func writeBindingConflict(w http.ResponseWriter, err error, userID string) {
+	var conflict *bindingDestinationConflict
+	if !errors.As(err, &conflict) {
+		jsonError(w, http.StatusInternalServerError, "Could not check credential destination conflicts")
+		return
+	}
+	details := map[string]string{"destination": conflict.candidate.MatcherPattern()}
+	message := "This destination overlaps an existing credential binding. Narrow its URL patterns; existing access was not changed."
+	if conflict.owner == userID {
+		details["existing_destination"] = conflict.existing.MatcherPattern()
+		details["connection_id"] = conflict.connectionID
+		details["connection_label"] = conflict.label
+		message = fmt.Sprintf("Destination %q overlaps credential %q at %q. Narrow its URL patterns; existing access was not changed.",
+			details["destination"], conflict.label, details["existing_destination"])
+	}
+	jsonStatus(w, http.StatusConflict, map[string]any{
+		"code": "binding_conflict", "error": message, "conflict": details,
+	})
+}
+
 func (s *Server) assertBindingDestinationsCompatible(ctx context.Context, vault, exclude, kind string, selected []broker.Service) error {
 	bindings, err := s.loadBindings(ctx, vault)
 	if err != nil {
 		return err
 	}
-	var occupied []broker.Service
+	type occupiedService struct {
+		service                    broker.Service
+		connectionID, label, owner string
+	}
+	var occupied []occupiedService
 	for _, b := range bindings {
 		if b.id != exclude && b.status != "revoked" {
 			if kind != "static" && b.kind != "static" {
 				continue
 			}
-			occupied = append(occupied, b.services...)
+			for _, service := range b.services {
+				occupied = append(occupied, occupiedService{service, b.id, b.label, b.owner.ID})
+			}
 		}
 	}
 	cfg, err := s.store.GetBrokerConfig(ctx, vault)
@@ -103,12 +129,14 @@ func (s *Server) assertBindingDestinationsCompatible(ctx context.Context, vault,
 		if err = json.Unmarshal([]byte(cfg.ServicesJSON), &local); err != nil {
 			return err
 		}
-		occupied = append(occupied, local...)
+		for _, service := range local {
+			occupied = append(occupied, occupiedService{service: service})
+		}
 	}
 	for _, candidate := range selected {
 		for _, old := range occupied {
-			if serviceOverlap(candidate, old) {
-				return fmt.Errorf("a local or shared binding already occupies this service destination")
+			if serviceOverlap(candidate, old.service) {
+				return &bindingDestinationConflict{candidate, old.service, old.connectionID, old.label, old.owner}
 			}
 		}
 	}
@@ -130,7 +158,7 @@ func (s *Server) authorizeBinding(ctx context.Context, vault string, b sharedBin
 		return err
 	}
 	if count != 1 {
-		return fmt.Errorf("%w: shared binding is revoked, suspended or stale", brokercore.ErrServiceDisabled)
+		return fmt.Errorf("%w: shared binding is revoked, suspended or stale", brokercore.ErrBindingInactive)
 	}
 	return nil
 }
@@ -173,11 +201,11 @@ func accessBindingHandle(values []string) (string, error) {
 		parts := strings.Fields(value)
 		if len(values) != 1 || len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") ||
 			!strings.HasPrefix(parts[1], mcpauth.AccessPlaceholderPrefix) {
-			return "", fmt.Errorf("%w: malformed OAuth binding selector", brokercore.ErrServiceDisabled)
+			return "", fmt.Errorf("%w: malformed OAuth binding selector", brokercore.ErrBindingInvalid)
 		}
 		handle := strings.TrimPrefix(parts[1], mcpauth.AccessPlaceholderPrefix)
 		if handle == "" {
-			return "", fmt.Errorf("%w: empty OAuth binding selector", brokercore.ErrServiceDisabled)
+			return "", fmt.Errorf("%w: empty OAuth binding selector", brokercore.ErrBindingInvalid)
 		}
 		return handle, nil
 	}
@@ -222,7 +250,7 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 	if values := brokercore.RequestBinding(ctx); len(values) != 0 {
 		if len(values) != 1 || !strings.HasPrefix(values[0], "BIND_") || len(values[0]) > 200 ||
 			strings.ContainsAny(values[0], " \t\r\n,") || (handle != "" && handle != values[0]) {
-			return nil, fmt.Errorf("%w: malformed or conflicting group binding selector", brokercore.ErrServiceDisabled)
+			return nil, fmt.Errorf("%w: malformed or conflicting group binding selector", brokercore.ErrBindingInvalid)
 		}
 		handle, explicitBinding = values[0], true
 	}
@@ -234,7 +262,10 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 		if matched == nil {
 			continue
 		}
-		if b.status != "revoked" || handle == b.handle {
+		if handle == b.handle && b.status == "revoked" {
+			return nil, fmt.Errorf("%w: selected shared binding was revoked", brokercore.ErrBindingInactive)
+		}
+		if b.status != "revoked" {
 			matchedBindings = append(matchedBindings, i)
 			matchedServices = append(matchedServices, matched)
 		}
@@ -244,7 +275,7 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 	for i, index := range matchedBindings {
 		b := &bindings[index]
 		if len(matchedBindings) > 1 && b.kind == "static" {
-			return nil, fmt.Errorf("%w: static/shared binding conflict", brokercore.ErrServiceDisabled)
+			return nil, fmt.Errorf("%w: static/shared binding conflict", brokercore.ErrBindingConflict)
 		}
 		if handle != "" {
 			if b.handle == handle && (explicitBinding || b.kind != "static") {
@@ -255,15 +286,15 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 		}
 	}
 	if handle != "" && chosen == nil {
-		return nil, fmt.Errorf("%w: OAuth binding selector is not authorized at this destination", brokercore.ErrServiceDisabled)
+		return nil, fmt.Errorf("%w: binding selector is not authorized at this destination", brokercore.ErrBindingDestinationMismatch)
 	}
 	if handle == "" && len(matchedBindings) > 1 {
-		return nil, fmt.Errorf("%w: ambiguous shared bindings require an explicit OAuth access placeholder", brokercore.ErrServiceDisabled)
+		return nil, fmt.Errorf("%w: ambiguous shared bindings require an explicit OAuth access placeholder", brokercore.ErrBindingSelectionRequired)
 	}
 	if chosen == nil {
 		for _, b := range bindings {
 			if matched, _ := broker.MatchService(host, port, path, b.services); matched != nil && b.status == "revoked" {
-				return nil, fmt.Errorf("%w: matching shared binding was revoked", brokercore.ErrServiceDisabled)
+				return nil, fmt.Errorf("%w: matching shared binding was revoked", brokercore.ErrBindingInactive)
 			}
 		}
 		return p.local.Inject(ctx, vault, host, port, path)
@@ -284,7 +315,7 @@ func (p sharedCredentialProvider) Inject(ctx context.Context, vault, host string
 		}
 		for _, candidate := range local {
 			if serviceOverlap(*service, candidate) {
-				return nil, fmt.Errorf("%w: local/shared binding conflict", brokercore.ErrServiceDisabled)
+				return nil, fmt.Errorf("%w: local/shared binding conflict", brokercore.ErrBindingConflict)
 			}
 		}
 	}
@@ -341,13 +372,16 @@ func (s *Server) sharedTokenResponse(ctx context.Context, vault string, r *http.
 				continue
 			}
 			matched, _ := broker.MatchService(r.URL.Hostname(), port, r.URL.Path, b.services)
-			if matched != nil && r.URL.Scheme == "https" && s.authorizeBinding(ctx, vault, b) == nil {
+			if matched != nil && r.URL.Scheme == "https" {
+				if err := s.authorizeBinding(ctx, vault, b); err != nil {
+					return nil, err
+				}
 				allowed = true
+				break
 			}
 		}
 		if !allowed {
-			body, _ := json.Marshal(map[string]string{"error": "invalid_binding", "message": "Access placeholder is unknown, revoked or not authorized at this destination"})
-			return &http.Response{StatusCode: 403, Header: http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}}, Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body))}, nil
+			return nil, brokercore.ErrBindingDestinationMismatch
 		}
 	}
 	return s.mcpOAuth.BindingTokenResponse(ctx, r, func(handle string) (*mcpauth.Account, error) {

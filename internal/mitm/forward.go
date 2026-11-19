@@ -257,7 +257,7 @@ func (p *Proxy) forwardRequest(
 	}
 	local := r.Clone(r.Context())
 	local.URL = outURL
-	if p.localResponse(w, local, scope.VaultID, emit) {
+	if p.localResponse(w, local, scope, emit) {
 		return
 	}
 	r.Body = local.Body
@@ -272,11 +272,8 @@ func (p *Proxy) forwardRequest(
 		event.Passthrough = inject.Passthrough
 	}
 	if err != nil {
-		errCode := "no_match"
-		status := http.StatusForbidden
+		status, errCode := brokercore.ClassifyInjectError(err)
 		if errors.Is(err, brokercore.ErrCredentialMissing) {
-			errCode = "credential_not_found"
-			status = http.StatusBadGateway
 			brokercore.LogCredentialMissing(p.logger, scope.VaultID, event.MatchedService, event.CredentialKeys)
 		}
 		brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
@@ -287,6 +284,8 @@ func (p *Proxy) forwardRequest(
 	if inject.Authorize != nil {
 		if err := inject.Authorize(r.Context()); err != nil {
 			brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
+			status, code := brokercore.ClassifyInjectError(err)
+			emit(status, code)
 			return
 		}
 		ctx, cancel := context.WithCancel(r.Context())
@@ -388,6 +387,8 @@ func (p *Proxy) forwardRequest(
 	if inject.Authorize != nil {
 		if err := inject.Authorize(r.Context()); err != nil {
 			brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
+			status, code := brokercore.ClassifyInjectError(err)
+			emit(status, code)
 			return
 		}
 	}

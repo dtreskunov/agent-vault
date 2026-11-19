@@ -33,11 +33,11 @@ func TestExplicitStaticBindingCannotFallThroughAfterRevocation(t *testing.T) {
 	if w := f.call("PUT", f.base()+"/connections/"+replacement.ID+"/grants/group-one", `{}`, ""); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body)
 	}
-	if _, err := f.s.CredentialProvider().Inject(selected, vault.ID, "api.example.com", 443, "/v1/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+	if _, err := f.s.CredentialProvider().Inject(selected, vault.ID, "api.example.com", 443, "/v1/items"); !errors.Is(err, brokercore.ErrBindingInactive) {
 		t.Fatal("revoked reference silently selected another static account", err)
 	}
 	for _, values := range [][]string{{""}, {"BIND_A", "BIND_B"}, {"BIND_A,BIND_B"}} {
-		if _, err := f.s.CredentialProvider().Inject(brokercore.WithRequestBinding(ctx, values), vault.ID, "api.example.com", 443, "/v1/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+		if _, err := f.s.CredentialProvider().Inject(brokercore.WithRequestBinding(ctx, values), vault.ID, "api.example.com", 443, "/v1/items"); !errors.Is(err, brokercore.ErrBindingInvalid) {
 			t.Fatal("malformed selector accepted", err)
 		}
 	}

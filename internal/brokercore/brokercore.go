@@ -207,28 +207,55 @@ func WriteForbiddenHint(w http.ResponseWriter, targetHost, vaultName, baseURL st
 	_ = json.NewEncoder(w).Encode(ForbiddenHintBody(targetHost, vaultName, baseURL))
 }
 
+type injectFailure struct {
+	cause         error
+	status        int
+	code, message string
+}
+
+var injectFailures = []injectFailure{
+	{ErrServiceNotFound, http.StatusForbidden, "forbidden", ""},
+	{ErrServiceDisabled, http.StatusForbidden, "service_disabled", "Broker service matching host %q in vault %q is currently disabled"},
+	{ErrBindingDestinationMismatch, http.StatusForbidden, "binding_destination_mismatch", "The supplied binding selector does not authorize this destination. Do not reuse MCP binding headers for unrelated REST calls; use access approved for the exact destination."},
+	{ErrBindingSelectionRequired, http.StatusForbidden, "binding_selection_required", "Multiple credentials match this destination; select an explicitly approved binding."},
+	{ErrBindingInactive, http.StatusForbidden, "binding_inactive", "The selected credential binding is revoked, suspended or no longer authorized. Review agent access in Credentials."},
+	{ErrBindingInvalid, http.StatusForbidden, "binding_invalid", "The binding selector is malformed or conflicting. Use the selector supplied for the approved destination."},
+	{ErrBindingConflict, http.StatusForbidden, "binding_conflict", "Credential bindings overlap at this destination. Review their URL patterns; no credential was selected."},
+	{ErrOAuthNotConnected, http.StatusBadGateway, "oauth_not_connected", "OAuth credential is approved but not yet connected — complete the connection in the Agent Vault dashboard"},
+	{ErrOAuthRefreshFailed, http.StatusBadGateway, "oauth_refresh_failed", "OAuth token expired and refresh failed — reconnect in the Agent Vault dashboard"},
+	{ErrCredentialMissing, http.StatusBadGateway, "credential_not_found", "A required credential could not be resolved; check vault configuration"},
+}
+
+func classifyInjectError(err error) injectFailure {
+	for _, failure := range injectFailures {
+		if errors.Is(err, failure.cause) {
+			return failure
+		}
+	}
+	return injectFailure{status: http.StatusInternalServerError, code: "internal", message: "Failed to resolve broker services"}
+}
+
+// ClassifyInjectError is shared by HTTP responses and request logs.
+func ClassifyInjectError(err error) (int, string) {
+	failure := classifyInjectError(err)
+	return failure.status, failure.code
+}
+
 // WriteInjectError maps a CredentialProvider.Inject error to the standard
 // HTTP response on the MITM ingress. baseURL is the externally-reachable
 // control-plane URL for help links. Callers that want to log before
 // responding should do so before calling this helper.
 func WriteInjectError(w http.ResponseWriter, err error, targetHost, vaultName, baseURL string) {
-	switch {
-	case errors.Is(err, ErrServiceNotFound):
+	failure := classifyInjectError(err)
+	if failure.cause == ErrServiceNotFound {
 		WriteForbiddenHint(w, targetHost, vaultName, baseURL)
-	case errors.Is(err, ErrServiceDisabled):
-		writeProxyErrorWithHelp(w, http.StatusForbidden, "service_disabled",
-			fmt.Sprintf("Broker service matching host %q in vault %q is currently disabled", targetHost, vaultName), baseURL)
-	case errors.Is(err, ErrOAuthNotConnected):
-		writeProxyErrorWithHelp(w, http.StatusBadGateway, "oauth_not_connected",
-			"OAuth credential is approved but not yet connected — complete the connection in the Agent Vault dashboard", baseURL)
-	case errors.Is(err, ErrOAuthRefreshFailed):
-		writeProxyErrorWithHelp(w, http.StatusBadGateway, "oauth_refresh_failed",
-			"OAuth token expired and refresh failed — reconnect in the Agent Vault dashboard", baseURL)
-	case errors.Is(err, ErrCredentialMissing):
-		writeProxyErrorWithHelp(w, http.StatusBadGateway, "credential_not_found",
-			"A required credential could not be resolved; check vault configuration", baseURL)
-	default:
-		WriteProxyError(w, http.StatusInternalServerError, "internal",
-			"Failed to resolve broker services")
+		return
 	}
+	if failure.cause == ErrServiceDisabled {
+		failure.message = fmt.Sprintf(failure.message, targetHost, vaultName)
+	}
+	if failure.status == http.StatusInternalServerError {
+		baseURL = ""
+	}
+	writeProxyErrorWithHelp(w, failure.status, failure.code, failure.message, baseURL)
 }

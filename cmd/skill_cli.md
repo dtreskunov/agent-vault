@@ -268,6 +268,11 @@ WSS and WS connections also go through the proxy with credential injection — i
 - 401: invalid or expired token
 - 403 with `proposal_hint`: host not allowed — create a proposal
 - 403 `service_disabled`: host is configured but disabled by operator — tell the user
+- 403 `binding_destination_mismatch`: the supplied selector does not authorize this destination; never copy MCP binding headers into unrelated REST calls
+- 403 `binding_selection_required`: multiple credentials match; use the explicitly approved selector for the intended account
+- 403 `binding_inactive`: access is revoked, suspended or no longer authorized; ask the user to review access
+- 403 `binding_invalid`: malformed or conflicting selectors; use only the selector supplied for the approved destination
+- 403 `binding_conflict`: overlapping credential destinations; ask the user to review URL patterns
 - 502: missing credential or upstream unreachable
 - 502 `oauth_not_connected`: OAuth credential approved but not yet connected — tell the user to complete the connection in the dashboard
 - 502 `oauth_refresh_failed`: OAuth token expired and refresh failed — tell the user to reconnect in the dashboard

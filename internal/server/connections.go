@@ -555,7 +555,7 @@ func (s *Server) handleConnectionUpdate(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			if err = s.assertBindingDestinationsCompatible(r.Context(), vault.ID, c.ID, c.Kind, c.Services); err != nil {
-				jsonCodedError(w, 409, "binding_conflict", err.Error())
+				writeBindingConflict(w, err, a.ID)
 				return
 			}
 		}
@@ -703,7 +703,7 @@ func (s *Server) handleConnectionGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = s.assertBindingDestinationsCompatible(r.Context(), v.ID, c.ID, c.Kind, selected); err != nil {
-		jsonCodedError(w, 409, "binding_conflict", err.Error())
+		writeBindingConflict(w, err, a.ID)
 		return
 	}
 	raw, _ := json.Marshal(names)

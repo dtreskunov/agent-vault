@@ -130,6 +130,12 @@ placeholder; ambiguous requests without a selection fail closed. Discovery and
 `vault discover` expose the access placeholder and whether selection is required.
 Unknown, revoked or cross-group selections never fall through to another account.
 Static/static and static/OAuth destination conflicts remain rejected.
+Exact paths are not prefixes: `/` permits only root, `/api/states` permits
+that endpoint, and `/api/states/*` permits descendants. Conflict responses
+identify the overlapping destination and, only for the effective owner's
+connections, the conflicting credential. Proxy binding mismatch, inactive
+access and required-selection errors are distinct from `service_disabled`;
+see the [gateway contract](docs/guides/nanoclaw-gateway.mdx).
 Service names are scoped to their connection: different connections may reuse a
 name such as `route-1` when their destinations do not overlap. Names must still
 be unique within each connection; changing a name cannot bypass destination

@@ -96,7 +96,7 @@ func TestSharedQueryCredentialResolutionAndRevocation(t *testing.T) {
 	if w := f.call("DELETE", path, "", ""); w.Code != http.StatusNoContent {
 		t.Fatal(w.Code, w.Body)
 	}
-	if _, err := f.s.CredentialProvider().Inject(selected, vault.ID, "api.example.com", 443, "/v1/items"); !errors.Is(err, brokercore.ErrServiceDisabled) {
+	if _, err := f.s.CredentialProvider().Inject(selected, vault.ID, "api.example.com", 443, "/v1/items"); !errors.Is(err, brokercore.ErrBindingInactive) {
 		t.Fatal("revoked query binding remained usable", err)
 	}
 }
